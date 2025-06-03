@@ -3,206 +3,218 @@ import matplotlib.pyplot as plt
 
 h.load_file("stdrun.hoc")
 
-# Cells
+N_actions = 12  # number of action channels
+actions = [3,5,7]
+
 def create_cell(name):
     sec = h.Section(name=name)
     sec.insert('hh')
     return sec
 
-d1 = create_cell('D1')
-d2 = create_cell('D2')
-gpe = create_cell('GPe')
-gpi = create_cell('GPi')
-thalamus = create_cell('Thalamus')
+# Create neuron populations
+d1 = [create_cell(f'D1_{i}') for i in range(N_actions)]
+d2 = [create_cell(f'D2_{i}') for i in range(N_actions)]
+gpe = [create_cell(f'GPe_{i}') for i in range(N_actions)]
+gpi = [create_cell(f'GPi_{i}') for i in range(N_actions)]
+thal = [create_cell(f'Thal_{i}') for i in range(N_actions)]
 
-# Spike detectors
-spike_d1 = h.APCount(d1(0.5))
-spike_times_d1 = h.Vector()
-spike_d1.record(spike_times_d1)
+# Spike detectors and vectors
+apc_refs = []
+spike_times = {'d1': [], 'd2': [], 'gpe': [], 'gpi': [], 'thal': []}
+for pop, name in zip([d1, d2, gpe, gpi, thal], spike_times.keys()):
+    for cell in pop:
+        apc = h.APCount(cell(0.5))
+        vec = h.Vector()
+        apc.record(vec)
+        spike_times[name].append(vec)
+        apc_refs.append(apc)
 
-spike_d2 = h.APCount(d2(0.5))
-spike_times_d2 = h.Vector()
-spike_d2.record(spike_times_d2)
+def create_stim(cell, start, number, interval, weight):
+    stim = h.NetStim()
+    stim.start = start
+    stim.number = number
+    stim.interval = interval
+    stim.noise = 0
+    syn = h.ExpSyn(cell(0.5))
+    syn.e = 0
+    nc = h.NetCon(stim, syn)
+    nc.weight[0] = weight
+    nc.delay = 1
+    return stim, syn, nc
 
-spike_gpe = h.APCount(gpe(0.5))
-spike_times_gpe = h.Vector()
-spike_gpe.record(spike_times_gpe)
+# Stimulate tonic activity of GPe
+stim_gpe = []
+syn_gpe = []
+nc_gpe = []
+for cell in gpe:
+    stim, syn, nc = create_stim(cell, start=5, number=1000, interval=20, weight=2)
+    stim_gpe.append(stim)
+    syn_gpe.append(syn)
+    nc_gpe.append(nc)
 
-spike_gpi = h.APCount(gpi(0.5))
-spike_times_gpi = h.Vector()
-spike_gpi.record(spike_times_gpi)
+# Stimulate tonic activity of GPi
+stim_gpi = []
+syn_gpi = []
+nc_gpi = []
+for cell in gpi:
+    stim, syn, nc = create_stim(cell, start=10, number=1000, interval=20, weight=2)
+    stim_gpi.append(stim)
+    syn_gpi.append(syn)
+    nc_gpi.append(nc)
 
-spike_th = h.APCount(thalamus(0.5))
-spike_times_th = h.Vector()
-spike_th.record(spike_times_th)
+# Stimulate tonic activity of Thalamus 
+stim_thal = []
+syn_thal = []
+nc_thal = []
+for cell in thal:
+    stim, syn, nc = create_stim(cell, start=15, number=1000, interval=20, weight=2)
+    stim_thal.append(stim)
+    syn_thal.append(syn)
+    nc_thal.append(nc)
 
-# -------- Direct Pathway ----------------- #
-#'''
-# D1 spike train
-stim_d1 = h.NetStim()
-stim_d1.start = 100
-stim_d1.number = 5
-stim_d1.interval = 20
-stim_d1.noise = 0
+# Create D1 spike train (direct pathway)
+stim_d1 = []
+syn_d1 = []
+nc_d1 = []
+for i, cell in enumerate(d1):
+    # activate only channel 3 as example
+    if i in actions: # facilitate movement
+        stim, syn, nc = create_stim(cell, start=0, number=5, interval=20, weight=2)
+    else:
+        stim, syn, nc = create_stim(cell, start=0, number=0, interval=20, weight=2) 
+    stim_d1.append(stim)
+    syn_d1.append(syn)
+    nc_d1.append(nc)
 
-syn_d1 = h.ExpSyn(d1(0.5))
-syn_d1.e = 0
-nc_d1 = h.NetCon(stim_d1, syn_d1)
-nc_d1.weight[0] = 2
-nc_d1.delay = 1
-#'''
+# Create D2 spike train (indirect pathway)
+stim_d2 = []
+syn_d2 = []
+nc_d2 = []
+for i, cell in enumerate(d2):
+    # activate channel 7 as example
+    if i not in actions: # suppress movement
+        stim, syn, nc = create_stim(cell, start=0, number=5, interval=20, weight=2)
+    else:
+        stim, syn, nc = create_stim(cell, start=0, number=0, interval=20, weight=2)
+    stim_d2.append(stim)
+    syn_d2.append(syn)
+    nc_d2.append(nc)
 
-# GPi tonic spikes 
-stim_gpi = h.NetStim()
-stim_gpi.start = 10
-stim_gpi.number = 30
-stim_gpi.interval = 20
-stim_gpi.noise = 0
-
-syn_gpi = h.ExpSyn(gpi(0.5))
-syn_gpi.e = 0
-nc_gpi = h.NetCon(stim_gpi, syn_gpi)
-nc_gpi.weight[0] = 2
-nc_gpi.delay = 1
-
-# Thalamus tonic spikes
-stim_th = h.NetStim()
-stim_th.start = 15
-stim_th.number = 1000
-stim_th.interval = 20
-stim_th.noise = 0
-
-syn_th = h.ExpSyn(thalamus(0.5))
-syn_th.e = 0
-nc_th = h.NetCon(stim_th, syn_th)
-nc_th.weight[0] = 2
-nc_th.delay = 1
+# Connections:
 
 # D1 -> GPi inhibition
-syn_d1_gpi = h.ExpSyn(gpi(0.5))
-syn_d1_gpi.e = -80
-syn_d1_gpi.tau = 15
-nc_d1_gpi = h.NetCon(d1(0.5)._ref_v, syn_d1_gpi, sec=d1)
-nc_d1_gpi.threshold = 0
-nc_d1_gpi.weight[0] = 1.5 #1
-nc_d1_gpi.delay = 1
-
-# GPi -> Thalamus inhibition
-syn_gpi_th = h.ExpSyn(thalamus(0.5))
-syn_gpi_th.e = -80
-syn_gpi_th.tau = 5
-nc_gpi_th = h.NetCon(gpi(0.5)._ref_v, syn_gpi_th, sec=gpi)
-nc_gpi_th.threshold = 0
-nc_gpi_th.weight[0] = 1
-nc_gpi_th.delay = 1
-
-
-# -------- Indirect Pathway ----------------- #
-# D2 spike train (indirect pathway activation)
-#'''
-stim_d2 = h.NetStim()
-stim_d2.start = 250
-stim_d2.number = 5
-stim_d2.interval = 20
-stim_d2.noise = 0
-
-syn_d2 = h.ExpSyn(d2(0.5))
-syn_d2.e = 0
-nc_d2 = h.NetCon(stim_d2, syn_d2)
-nc_d2.weight[0] = 2
-nc_d2.delay = 1
-#'''
-
-# GPe tonic spikes
-stim_gpe = h.NetStim()
-stim_gpe.start = 5
-stim_gpe.number = 30
-stim_gpe.interval = 20
-stim_gpe.noise = 0
-
-syn_gpe = h.ExpSyn(gpe(0.5))
-syn_gpe.e = 0
-nc_gpe = h.NetCon(stim_gpe, syn_gpe)
-nc_gpe.weight[0] = 2
-nc_gpe.delay = 1
+d1_gpi_syns = []
+d1_gpi_ncs = []
+for i in range(N_actions):
+    syn = h.ExpSyn(gpi[i](0.5))
+    syn.e = -80
+    syn.tau = 15
+    nc = h.NetCon(d1[i](0.5)._ref_v, syn, sec=d1[i])
+    nc.threshold = 0
+    nc.weight[0] = 1
+    nc.delay = 1
+    d1_gpi_syns.append(syn)
+    d1_gpi_ncs.append(nc)
 
 # D2 -> GPe inhibition
-syn_d2_gpe = h.ExpSyn(gpe(0.5))
-syn_d2_gpe.e = -80
-syn_d2_gpe.tau = 15
-nc_d2_gpe = h.NetCon(d2(0.5)._ref_v, syn_d2_gpe, sec=d2)
-nc_d2_gpe.threshold = 0
-nc_d2_gpe.weight[0] = 1
-nc_d2_gpe.delay = 1
+d2_gpe_syns = []
+d2_gpe_ncs = []
+for i in range(N_actions):
+    syn = h.ExpSyn(gpe[i](0.5))
+    syn.e = -80
+    syn.tau = 15
+    nc = h.NetCon(d2[i](0.5)._ref_v, syn, sec=d2[i])
+    nc.threshold = 0
+    nc.weight[0] = 1
+    nc.delay = 1
+    d2_gpe_syns.append(syn)
+    d2_gpe_ncs.append(nc)
 
-# GPe -> GPi inhibition
-syn_gpe_gpi = h.ExpSyn(gpi(0.5))
-syn_gpe_gpi.e = -80
-syn_gpe_gpi.tau = 15
-nc_gpe_gpi = h.NetCon(gpe(0.5)._ref_v, syn_gpe_gpi, sec=gpe)
-nc_gpe_gpi.threshold = 0
-nc_gpe_gpi.weight[0] = 0.6#1
-nc_gpe_gpi.delay = 1
+# GPe -> GPi inhibition 
+gpe_gpi_syns = []
+gpe_gpi_ncs = []
+for i in range(N_actions):
+    syn = h.ExpSyn(gpi[i](0.5))
+    syn.e = -80
+    syn.tau = 15
+    nc = h.NetCon(gpe[i](0.5)._ref_v, syn, sec=gpe[i])
+    nc.threshold = 0
+    nc.weight[0] = 1
+    nc.delay = 1
+    gpe_gpi_syns.append(syn)
+    gpe_gpi_ncs.append(nc)
 
+# GPi -> Thal inhibition
+gpi_thal_syns = []
+gpi_thal_ncs = []
+for i in range(N_actions):
+    syn = h.ExpSyn(thal[i](0.5))
+    syn.e = -80
+    syn.tau = 5
+    nc = h.NetCon(gpi[i](0.5)._ref_v, syn, sec=gpi[i])
+    nc.threshold = 0
+    nc.weight[0] = 1
+    nc.delay = 1
+    gpi_thal_syns.append(syn)
+    gpi_thal_ncs.append(nc)
 
 # Recording
 t_vec = h.Vector().record(h._ref_t)
-v_d1 = h.Vector().record(d1(0.5)._ref_v)
-v_d2 = h.Vector().record(d2(0.5)._ref_v)
-v_gpe = h.Vector().record(gpe(0.5)._ref_v)
-v_gpi = h.Vector().record(gpi(0.5)._ref_v)
-v_th = h.Vector().record(thalamus(0.5)._ref_v)
 
-# Run
-h.tstop = 400
+v_d1 = [h.Vector().record(cell(0.5)._ref_v) for cell in d1]
+v_d2 = [h.Vector().record(cell(0.5)._ref_v) for cell in d2]
+v_gpe = [h.Vector().record(cell(0.5)._ref_v) for cell in gpe]
+v_gpi = [h.Vector().record(cell(0.5)._ref_v) for cell in gpi]
+v_thal = [h.Vector().record(cell(0.5)._ref_v) for cell in thal]
+
+# Run simulation
+h.tstop = 100
 h.run()
 
-# Plot
-fig, axs = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
-
-axs[0].plot(t_vec, v_d1, label='D1')
-axs[0].plot(t_vec, v_d2, label='D2', linestyle='--')
-axs[0].plot(t_vec, v_gpe, label='GPe', linestyle='--')
-axs[0].plot(t_vec, v_gpi, label='GPi')
-axs[0].plot(t_vec, v_th, label='Thalamus')
-axs[0].axvspan(100, 200, color='C0', alpha=0.3, label='direct pathway active')
-axs[0].axvspan(250, 350, color='C1', alpha=0.3, label='Indirect pathway active')
-axs[0].legend()
-axs[0].set_xlabel('Time (ms)')
-axs[0].set_ylabel('Membrane potential (mV)')
-axs[0].set_title('Basal Ganglia Toy Model')
+# Plot: membrane potentials of selected channels
+channels_to_plot = [0,1,2,3,4,5,6,7,8,9,10,11]  # channels where D1 or D2 activated
+fig, axs = plt.subplots(3, len(channels_to_plot), figsize=(14, 10), sharex=True)
 
 
-for t in spike_times_d1:
-    axs[1].plot(t, 3, "C0.", markersize=10)  # D1 
-for t in spike_times_gpi:
-    axs[1].plot(t, 2, "C3.", markersize=10)  # GPi 
-for t in spike_times_th:
-    axs[1].plot(t, 1, "C4.", markersize=10)  # Thalamus 
-axs[1].axvspan(100, 200, color='C0', alpha=0.3, label='direct pathway active')
-#axs[1].axvspan(250, 350, color='C1', alpha=0.3, label='indirect pathway active')
-axs[1].legend()
-axs[1].set_yticks([1, 2, 3], ['Thalamus', 'GPi', 'D1'])
-axs[1].set_xlabel('Time (ms)')
-axs[1].set_title('Spike Raster Plot')
-axs[1].set_ylim(0.5, 3.5)
+for i, ch in enumerate(channels_to_plot):
 
-for t in spike_times_d2:
-    axs[2].plot(t, 4, "C1.", markersize=10)  # D2
-for t in spike_times_gpe:
-    axs[2].plot(t, 3, "C2.", markersize=10)  # GPe
-for t in spike_times_gpi:
-    axs[2].plot(t, 2, "C3.", markersize=10)  # GPi 
-for t in spike_times_th:
-    axs[2].plot(t, 1, "C4.", markersize=10)  # Thalamus 
-#axs[2].axvspan(100, 200, color='C0', alpha=0.3, label='direct pathway active')
-axs[2].axvspan(250, 350, color='C1', alpha=0.3, label='indirect pathway active')
-axs[2].legend()
-axs[2].set_yticks([1, 2, 3, 4], ['Thalamus', 'GPi', 'GPe', 'D2'])
-axs[2].set_xlabel('Time (ms)')
-axs[2].set_title('Spike Raster Plot')
-axs[2].set_ylim(0.5, 4.5)
+    axs[0][i].plot(t_vec, v_d1[ch], label=f'D1')
+    axs[0][i].plot(t_vec, v_d2[ch], label=f'D2')
+    axs[0][i].plot(t_vec, v_gpe[ch], label=f'GPe')
+    axs[0][i].plot(t_vec, v_gpi[ch], label=f'GPi')
+    axs[0][i].plot(t_vec, v_thal[ch], label=f'Thal')
+    #axs[0][i].legend()
+    axs[0][i].set_xlabel('Time (ms)')
+    if i == 0:
+        axs[0][i].set_ylabel('Membrane potential (mV)')
+    axs[0][i].set_title(f'Action {channels_to_plot[i]}')
+
+
+    for t in spike_times['d1'][ch].to_python():
+        axs[1][i].plot(t, 3, "C0.", markersize=10)  # D1 
+    for t in spike_times['gpi'][ch].to_python():
+        axs[1][i].plot(t, 2, "C3.", markersize=10)  # GPi 
+    for t in spike_times['thal'][ch].to_python():
+        axs[1][i].plot(t, 1, "C4.", markersize=10)  # Thalamus 
+    axs[1][i].set_yticks([1, 2, 3], ['Thal', 'GPi', 'D1'])
+    axs[1][i].set_xlabel('Time (ms)')
+    if i == 0:
+        axs[1][i].set_ylabel('Direct Pathway')
+    axs[1][i].set_ylim(0.5, 3.5)
+
+    for t in spike_times['d2'][ch].to_python():
+        axs[2][i].plot(t, 4, "C1.", markersize=10)  # D2
+    for t in spike_times['gpe'][ch].to_python():
+        axs[2][i].plot(t, 3, "C2.", markersize=10)  # GPe
+    for t in spike_times['gpi'][ch].to_python():
+        axs[2][i].plot(t, 2, "C3.", markersize=10)  # GPi 
+    for t in spike_times['thal'][ch].to_python():
+        axs[2][i].plot(t, 1, "C4.", markersize=10)  # Thalamus 
+    axs[2][i].set_yticks([1, 2, 3, 4], ['Thal', 'GPi', 'GPe', 'D2'])
+    axs[2][i].set_xlabel('Time (ms)')
+    if i == 0:
+        axs[2][i].set_ylabel('Indirect Pathway')
+    axs[2][i].set_ylim(0.5, 4.5)
 
 plt.tight_layout()
 plt.show()
-
