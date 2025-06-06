@@ -10,6 +10,7 @@ h.load_file("stdrun.hoc")
 h.cvode_active(1)
 
 N_actions = 3  # number of action channels
+N_cells_per_type = 5
 paused = False
 actions = []  # default selected action
 
@@ -79,7 +80,6 @@ for cell in thal:
     stim_thal.append(stim)
     syn_thal.append(syn)
     nc_thal.append(nc)
-
 
 # Create D1 spike train (direct pathway)
 stim_d1 = []
@@ -355,14 +355,14 @@ while True:
     for i, ch in enumerate(channels_to_plot):
         # Update membrane voltage plot
         if t_vec: 
-            #lines_snc[i].set_data(t_vec, v_snc[ch])
-            #lines_d1[i].set_data(t_vec, v_d1[ch])
-            #lines_d2[i].set_data(t_vec, v_d2[ch])
-            #lines_gpe[i].set_data(t_vec, v_gpe[ch])
-            #lines_gpi[i].set_data(t_vec, v_gpi[ch])
-            #lines_thal[i].set_data(t_vec, v_thal[ch])
-            #axs[0][i].relim()       # Recalculate limits
-            #axs[0][i].autoscale_view()  # Apply new limits
+            lines_snc[i].set_data(t_vec, v_snc[ch])
+            lines_d1[i].set_data(t_vec, v_d1[ch])
+            lines_d2[i].set_data(t_vec, v_d2[ch])
+            lines_gpe[i].set_data(t_vec, v_gpe[ch])
+            lines_gpi[i].set_data(t_vec, v_gpi[ch])
+            lines_thal[i].set_data(t_vec, v_thal[ch])
+            axs[0][i].relim()       # Recalculate limits
+            axs[0][i].autoscale_view()  # Apply new limits
             # Update time axis
             axs[0][i].set_xlim(max(0, last_plot_update - plot_time_range), max(plot_time_range, last_plot_update))
 
