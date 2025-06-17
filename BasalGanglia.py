@@ -103,12 +103,12 @@ syns.update({conn: [] for conn in connection_types})
 
 # Define connection specifications
 connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
-    ('SNc', 'D1',   'SNc_to_D1',      0, 0,    10, 1), # excitatory
-    ('SNc', 'D2',   'SNc_to_D2',    -85, 0,    10, 1), # inhibitory
-    ('D1',  'GPi',  'D1_to_GPi',    -85, 0.1,  10, 1), # inhibitory
-    ('D2',  'GPe',  'D2_to_GPe',    -85, 0.1,  10, 1), # inhibitory
-    ('GPe', 'GPi',  'GPe_to_GPi',   -85, 0.05, 10, 1), # inhibitory
-    ('GPi', 'Thal', 'GPi_to_Thal',  -85, 0.1,  10, 1)  # inhibitory
+    ('SNc', 'D1',   'SNc_to_D1',      0, 0.1,  10, 1),   # excitatory
+    ('SNc', 'D2',   'SNc_to_D2',    -85, 0.1,  10, 1),   # inhibitory
+    ('D1',  'GPi',  'D1_to_GPi',    -85, 0.1,  10, 1),   # inhibitory
+    ('D2',  'GPe',  'D2_to_GPe',    -85, 0.1,  10, 1),   # inhibitory
+    ('GPe', 'GPi',  'GPe_to_GPi',   -85, 0.05, 10, 1),   # inhibitory
+    ('GPi', 'Thal', 'GPi_to_Thal',  -85, 0.1,  10, 1)    # inhibitory
 ]
 
 # Create connections based on the specification
@@ -398,6 +398,9 @@ h.finitialize()
 last_action_selection_time = 0
 last_weight_update_time = 0
 
+rates = {}
+rates_rel = {}
+
 while True:
     if paused or len(actions) == 0:
         time.sleep(0.1)
@@ -406,10 +409,9 @@ while True:
 
     elif int(h.t) != last_action_selection_time and int(h.t) % plot_time_range == plot_time_range/2:
         last_action_selection_time = h.t
-        rates, rates_rel = analyse_firing_rate('Thal')
-        selected_actions = [i for i,rate_rel in enumerate(rates_rel) if rate_rel > 0.5]
-        print(f'Time {h.t:.1f} ms: Selected Action = {selected_actions}, Rates = {rates}, Rates relative = {rates_rel}')
-        print(f"Goal {actions}")
+        rates['Thal'], rates_rel['Thal'] = analyse_firing_rate('Thal')
+        selected_actions = [i for i, rate_rel in enumerate(rates_rel['Thal']) if rate_rel > 0.5]
+        print(f"Time {h.t:.1f} ms: Goal = {actions}, Selected Actions = {selected_actions}, Rates = {rates['Thal']}, Rates relative = {rates_rel['Thal']}")
         if set(selected_actions) == set(actions):
             print("Reward")
             SNc_burst()
@@ -421,12 +423,33 @@ while True:
         last_weight_update_time = h.t
         toggle_pause()
         print("Learning")
-        rates, rates_rel = analyse_firing_rate('SNc', window=plot_time_range)
-        print(f'Time {h.t:.1f} ms: Rates = {rates}, Rates relative = {rates_rel}')
+        rates['SNc'], rates_rel['SNc'] = analyse_firing_rate('SNc', window=plot_time_range)
+        rates['D1'], rates_rel['D1'] = analyse_firing_rate('D1', window=plot_time_range)
+        rates['D2'], rates_rel['D2'] = analyse_firing_rate('D2', window=plot_time_range)
+        DA_level = np.mean(rates_rel['SNc'])
+        print(f"Time {h.t:.1f} ms: Rates = {rates['SNc']}, Rates relative = {rates_rel['SNc']}, DA level = {DA_level}")
+        print(f"Rates relative D1 = {rates_rel['D1']}, Rates relative D2 = {rates_rel['D2']}")
+
+        i, j = 0, 0
+        for a in range(N_actions):
+            for _ in cells['SNc'][a]:
+                for _ in cells['D1'][a]:
+                    # DA facilitates active D1 and inhibits less active D1
+                    delta_w = rates_rel['D1'][a] * (DA_level - 1) # baseline tonic firing rate of SNc corresponds to DA_level of 1
+                    ncs['SNc_to_D1'][i].weight[0] += 0.01 * delta_w
+                    ncs['SNc_to_D1'][i].weight[0] = max(0, ncs['SNc_to_D1'][i].weight[0]) # ensure weights are non-zero
+                    i += 1
+                for _ in cells['D2'][a]:
+                    # high DA increases inhibition, low DA suppresses inhibition
+                    delta_w = (DA_level - 1) # baseline tonic firing rate of SNc corresponds to DA_level of 1
+                    ncs['SNc_to_D2'][j].weight[0] += 0.01 * delta_w
+                    ncs['SNc_to_D2'][j].weight[0] = max(0, ncs['SNc_to_D2'][j].weight[0]) # ensure weights are non-zero
+                    j += 1
+
+        print(f"SNc-D1-Weights: {[nc.weight[0] for nc in ncs['SNc_to_D1']]}")
+        print(f"SNc-D2-Weights: {[nc.weight[0] for nc in ncs['SNc_to_D2']]}")
         continue
         
-        
-
     while (h.t - last_plot_update) < plot_interval:
         h.fadvance()
 
