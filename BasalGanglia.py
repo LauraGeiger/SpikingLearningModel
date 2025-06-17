@@ -258,37 +258,76 @@ width = 0.05
 height = 0.05
 gap_x = 0.02
 control_panel_y -= height + control_panel_y_gap
-def mute_tonic_SNc():
+def mute_tonic_SNc(actions=None):    
     global ncs
+    print(f"Mute tonic SNc before: {actions}")
+    if actions == None:
+        actions = list(range(N_actions))
+    print(f"Mute tonic SNc after: {actions}")
+    
+    i = 0
+    for a in range(N_actions):
+        for _ in cells['SNc'][a]:
+            if a in actions:
+                print(f"Muting tonic SNc {i}")
+                ncs['SNc'][i].weight[0] = 0
+            i += 1
     for nc in ncs['SNc']:
         nc.weight[0] = 0
-def restore_tonic_SNc():
-    global ncs
-    for nc in ncs['SNc']:
-        nc.weight[0] = stim_weights['SNc']
+
+def restore_tonic_SNc(actions=None):
+    if actions == None:
+        actions = list(range(N_actions))
+    print(actions)
+
+    i = 0
+    for a in range(N_actions):
+        for _ in cells['SNc'][a]:
+            if a in actions:
+                ncs['SNc'][i].weight[0] = stim_weights['SNc']
+            i += 1
+
 ax_error = plt.axes([control_panel_x, control_panel_y, width, height])
 buttons['error'] = Button(ax_error, 'Error')
-def SNc_dip(event=None):
+def SNc_dip(event=None, action=None):
     buttons['error'].color = 'r'
-    mute_tonic_SNc()
-    h.cvode.event(h.t + stim_intervals['SNc'] + 1, restore_tonic_SNc)  # Restore after 200 ms
+    mute_tonic_SNc(action)
+    h.cvode.event(h.t + stim_intervals['SNc'] + 1, restore_tonic_SNc(action))  # Restore after 200 ms
 buttons['error'].on_clicked(SNc_dip)
 ax_reward = plt.axes([control_panel_x + width + gap_x, control_panel_y, width, height])
 buttons['reward'] = Button(ax_reward, 'Reward')
-def start_burst_SNc():
-    for nc in ncs['SNc_burst']:
-        nc.weight[0] = 2
-def mute_burst_SNc():
-    for nc in ncs['SNc_burst']:
-        nc.weight[0] = 0
-def SNc_burst(event=None):
+def start_burst_SNc(action=None):
+    if actions == None:
+        actions = list(range(N_actions))
+    print(actions)
+    
+    i = 0
+    for a in range(N_actions):
+        for _ in cells['SNc_burst'][a]:
+            if a in actions:
+                ncs['SNc'][i].weight[0] = 2
+            i += 1
+
+def mute_burst_SNc(action=None):
+    if actions == None:
+        actions = list(range(N_actions))
+    print(actions)
+    
+    i = 0
+    for a in range(N_actions):
+        for _ in cells['SNc_burst'][a]:
+            if a in actions:
+                ncs['SNc'][i].weight[0] = 0
+            i += 1
+
+def SNc_burst(event=None, action=None):
     buttons['reward'].color = 'g'
-    mute_tonic_SNc()
-    start_burst_SNc()
+    mute_tonic_SNc(action)
+    start_burst_SNc(action)
     n_spikes = 5
     delay = stim_intervals['SNc_burst'] * n_spikes
-    h.cvode.event(h.t + delay, mute_burst_SNc)  
-    h.cvode.event(h.t + delay, restore_tonic_SNc)  
+    h.cvode.event(h.t + delay, mute_burst_SNc(action))  
+    h.cvode.event(h.t + delay, restore_tonic_SNc(action))  
 buttons['reward'].on_clicked(SNc_burst)
 
 
@@ -414,10 +453,10 @@ while True:
         print(f"Time {h.t:.1f} ms: Goal = {actions}, Selected Actions = {selected_actions}, Rates = {rates['Thal']}, Rates relative = {rates_rel['Thal']}")
         if set(selected_actions) == set(actions):
             print("Reward")
-            SNc_burst()
+            SNc_burst()#actions=)
         else:
             print("Error")
-            SNc_dip()
+            SNc_dip()#actions=)
 
     elif int(h.t) != last_weight_update_time and int(h.t) % plot_time_range == 0:
         last_weight_update_time = h.t
