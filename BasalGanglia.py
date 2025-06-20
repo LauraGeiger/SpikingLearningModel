@@ -34,7 +34,7 @@ stim_weights = {
     'GPi' : 2,
     'Thal': 2,
     'SNc_burst': 2,
-    'Cor': 1.66
+    'Cor': 2
 }
 stims, syns, ncs = {}, {}, {}
 
@@ -51,6 +51,7 @@ connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
 N_actions = 3
 paused = False
 target_actions = []
+expected_reward = {}
 
 apc_refs = []
 
@@ -87,8 +88,8 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2):
 
 
 def SNc_dip(event=None, actions=None):
-    for a in actions:
-        buttons[f'penalty_{a}'].color = 'r'
+    #for a in actions:
+    #    buttons[f'penalty_{a}'].color = 'r'
     update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
     h.cvode.event(h.t + stim_intervals['SNc'], lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
 
@@ -104,8 +105,8 @@ def update_stimulus_activation(cell, stimulus, actions=None, active=True):
             i += 1
 
 def SNc_burst(event=None, actions=None):
-    for a in actions:
-        buttons[f'reward_{a}'].color = 'g'
+    #for a in actions:
+    #    buttons[f'reward_{a}'].color = 'g'
     update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
     update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=True) # start SNc burst stimulus
     n_spikes = 5
@@ -152,8 +153,8 @@ def toggle_pause(event=None):
     if not paused:
         buttons['pause'].color = '0.85'
         for a in range(N_actions):
-            buttons[f'penalty_{a}'].color = '0.85'
-            buttons[f'reward_{a}'].color = '0.85'
+            #buttons[f'penalty_{a}'].color = '0.85'
+            #buttons[f'reward_{a}'].color = '0.85'
             buttons[f'selected_{a}'].label.set_text('Action not\nselected')
             buttons[f'selected_{a}'].color = '0.85'
     else:
@@ -412,14 +413,14 @@ for a in range(N_actions):
     buttons[f'target_{a}'].on_clicked(lambda event, a=a: toggle_target_action(event=event, action=a))
 
     # Penalty button
-    ax_penalty = axs[row_control_upper][col_potential+a].inset_axes([0.75,0.55,0.25,0.45])
-    buttons[f'penalty_{a}'] = Button(ax_penalty, 'Penalty')
-    buttons[f'penalty_{a}'].on_clicked(lambda event, a=a: SNc_dip(event=event, actions=[a]))
+    #ax_penalty = axs[row_control_upper][col_potential+a].inset_axes([0.75,0.55,0.25,0.45])
+    #buttons[f'penalty_{a}'] = Button(ax_penalty, 'Penalty')
+    #buttons[f'penalty_{a}'].on_clicked(lambda event, a=a: SNc_dip(event=event, actions=[a]))
 
     # Reward button
-    ax_reward = axs[row_control_upper][col_potential+a].inset_axes([0.75,0,0.25,0.45])
-    buttons[f'reward_{a}'] = Button(ax_reward, 'Reward')
-    buttons[f'reward_{a}'].on_clicked(lambda event, a=a: SNc_burst(event=event, actions=[a]))
+    #ax_reward = axs[row_control_upper][col_potential+a].inset_axes([0.75,0,0.25,0.45])
+    #buttons[f'reward_{a}'] = Button(ax_reward, 'Reward')
+    #buttons[f'reward_{a}'].on_clicked(lambda event, a=a: SNc_burst(event=event, actions=[a]))
 
 #--- Lower control panel ---#
 
@@ -448,7 +449,7 @@ while True:
         h.cvode.event(h.t + 300, lambda: update_stimulus_activation(cell='D2', stimulus='Cor_D2', actions=target_actions, active=False))  # stop cortical input stimulus for that action
 
     if int(h.t) != last_action_selection_time and int(h.t) % plot_time_range == plot_time_range/2:
-        last_action_selection_time = h.t
+        last_action_selection_time = int(h.t)
         rates['Thal'], rates_rel['Thal'] = analyse_firing_rate('Thal')
         selected_actions = [i for i, rate_rel in enumerate(rates_rel['Thal']) if rate_rel > 0.5]
 
@@ -456,20 +457,39 @@ while True:
             buttons[f'selected_{action}'].label.set_text('Action\nselected')
             buttons[f'selected_{action}'].color = 'y'
 
-        print(f"Time {h.t:.1f} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
+        print(f"Time {last_action_selection_time} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
         correct_actions = list(set(target_actions) & set(selected_actions))
         incorrect_actions = list(set(target_actions) ^ set(selected_actions))
-        #if len(correct_actions) > 0:
-        #    SNc_burst(event=None, actions=correct_actions)
-        #if len(incorrect_actions) > 0:
-        #    SNc_dip(event=None, actions=incorrect_actions)
+        
+        for action in correct_actions:
+            buttons[f'selected_{action}'].color = 'g'
+        for action in incorrect_actions:
+            buttons[f'selected_{action}'].color = 'r'
+        
         if set(selected_actions) == set(target_actions): # reward
-            SNc_burst(event=None, actions=[0,1,2])
+            reward = 1
+            print("Reward")
+            #SNc_burst(event=None, actions=[0,1,2])
         else: # No reward
+            reward = 0
+            print("No reward")
+            #SNc_dip(event=None, actions=[0,1,2])
+        
+        input_key = frozenset(target_actions)
+        if input_key not in expected_reward:
+            expected_reward[input_key] = 0.5
+        expected_reward[input_key] += 0.1 * (reward - expected_reward[input_key])
+        DA_signal = reward - expected_reward[input_key]
+        if DA_signal > 0:
+            SNc_burst(event=None, actions=[0,1,2])
+        elif DA_signal < 0:
             SNc_dip(event=None, actions=[0,1,2])
+        print(expected_reward)
+
+            
 
     elif int(h.t) != last_weight_update_time and int(h.t) % plot_time_range == 0:
-        last_weight_update_time = h.t
+        last_weight_update_time = int(h.t)
         toggle_pause()
         rates['SNc'], rates_rel['SNc'] = analyse_firing_rate('SNc', window=plot_time_range)
         rates['D1'], rates_rel['D1'] = analyse_firing_rate('D1', window=plot_time_range, average=False)
@@ -478,29 +498,29 @@ while True:
 
         i, j = 0, 0
         for a in range(N_actions):
-            print(f"Action {a}: rel rate D1 = {rates_rel['D1'][a]}, rel rate SNc = {rates_rel['SNc'][a]}")
+            print(f"Action {a}: rel rate D1 = {rates_rel['D1'][a]}, rel rate SNc = {rates_rel['SNc'][a]}, DA signal = {DA_signal}")
             #for _ in cells['SNc'][a]:
             for n,_ in enumerate(cells['D1'][a]):
                 # DA facilitates active D1 and inhibits less active D1
-                delta_w = (rates_rel['D1'][a][n] - 1) * (rates_rel['SNc'][a] - 1) # baseline tonic firing rate corresponds to relative rate of 1
+                delta_w = (rates_rel['D1'][a][n] - 1) * DA_signal #(rates_rel['SNc'][a] - 1) # baseline tonic firing rate corresponds to relative rate of 1
                 ncs['Cor_D1'][i].weight[0] += 0.1 * delta_w
                 ncs['Cor_D1'][i].weight[0] = max(0, ncs['Cor_D1'][i].weight[0]) # ensure weights are non-zero
                 i += 1
             for _ in cells['D2'][a]:
                 # high DA increases inhibition, low DA suppresses inhibition
-                delta_w = (1 - rates_rel['SNc'][a]) # baseline tonic firing rate of SNc corresponds to relative rate of 1
+                delta_w = - DA_signal # (1 - rates_rel['SNc'][a]) # baseline tonic firing rate of SNc corresponds to relative rate of 1
                 ncs['Cor_D2'][j].weight[0] += 0.1 * delta_w
                 ncs['Cor_D2'][j].weight[0] = max(0, ncs['Cor_D2'][j].weight[0]) # ensure weights are non-zero
                 j += 1
 
-        print(f"{h.t:.0f}ms: Cor-D1-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_D1']]}")
-        print(f"{h.t:.0f}ms: Cor-D2-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_D2']]}")
+        print(f"{last_weight_update_time}ms: Cor-D1-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_D1']]}")
+        print(f"{last_weight_update_time}ms: Cor-D2-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_D2']]}")
         continue
         
-    while (h.t - last_plot_update) < plot_interval:
+    while (int(h.t) - last_plot_update) < plot_interval:
         h.fadvance()
 
-    last_plot_update = h.t
+    last_plot_update = int(h.t)
     t_array = np.array(t_vec)
 
     for i, ch in enumerate(channels_to_plot):
