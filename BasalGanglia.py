@@ -11,35 +11,37 @@ h.cvode_active(1)
 
 #--- Global Variables ------------------------------------------------------------------------------------------------------------------------------------------------#
 cell_types = ['SNc', 'D1', 'D2', 'GPe', 'GPi', 'Thal']
-cell_numbers = {'SNc': 1, 'D1': 5, 'D2': 5, 'GPe': 5, 'GPi': 5, 'Thal': 5}
+cell_numbers = {'SNc': 5, 'D1': 5, 'D2': 5, 'GPe': 5, 'GPi': 5, 'Thal': 5}
 connection_types = ['SNc_to_D1', 'SNc_to_D2', 'D1_to_GPi', 'D2_to_GPe', 'GPe_to_GPi', 'GPi_to_Thal']
 
 # Tonic stimulation for all cells
 stim_intervals = {
-    'SNc' : 200, #  5 Hz
-    'D1'  : 25,#20,     # 50 Hz 
-    'D2'  : 25,#20,     # 50 Hz 
-    'GPe' : 25,#12.5,  # 80 Hz
-    'GPi' : 25,#10,    # 100 Hz
-    'Thal': 25,    # 20 Hz
-    'SNc_burst':20
+    'SNc'       : 1000 / 5,  #  5 Hz
+    'D1'        : 1000 / 5,  #  5 Hz (tonic baseline)
+    'D2'        : 1000 / 5,  #  5 Hz (tonic baseline)
+    'GPe'       : 25,#12.5,  # 80 Hz
+    'GPi'       : 25,#10,    # 100 Hz
+    'Thal'      : 1000 / 20, # 20 Hz
+    'SNc_burst' : 1000 / 50, # 50 Hz
+    'Cor'       : 1000 / 40  # 40 Hz
 }
 
 stim_weights = {
     'SNc' : 2,
-    'D1'  : 0,
-    'D2'  : 0,
+    'D1'  : 2,
+    'D2'  : 2,
     'GPe' : 2,
     'GPi' : 2,
     'Thal': 2,
-    'SNc_burst': 0
+    'SNc_burst': 2,
+    'Cor': 1.66
 }
 stims, syns, ncs = {}, {}, {}
 
 # Define connection specifications
 connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
-    ('SNc', 'D1',   'SNc_to_D1',      0, 0.5,  10, 1),   # excitatory
-    ('SNc', 'D2',   'SNc_to_D2',    -85, 0.5,  10, 1),   # inhibitory
+    ('SNc', 'D1',   'SNc_to_D1',      0, 0,    10, 1),   # excitatory
+    ('SNc', 'D2',   'SNc_to_D2',    -85, 0,    10, 1),   # inhibitory
     ('D1',  'GPi',  'D1_to_GPi',    -85, 0.1,  10, 1),   # inhibitory
     ('D2',  'GPe',  'D2_to_GPe',    -85, 0.1,  10, 1),   # inhibitory
     ('GPe', 'GPi',  'GPe_to_GPi',   -85, 0.05, 10, 1),   # inhibitory
@@ -83,78 +85,65 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2):
     nc.delay = 1
     return stim, syn, nc
 
-def mute_tonic_SNc(actions=None):
-    if actions == None:
-        actions = list(range(N_actions))
-    i = 0
-    for a in range(N_actions):
-        for _ in cells['SNc'][a]:
-            if a in actions:
-                ncs['SNc'][i].weight[0] = 0
-            i += 1
-    
-def restore_tonic_SNc(actions=None):
-    if actions == None:
-        actions = list(range(N_actions))
-    i = 0
-    for a in range(N_actions):
-        for _ in cells['SNc'][a]:
-            if a in actions:
-                ncs['SNc'][i].weight[0] = stim_weights['SNc']
-            i += 1
 
 def SNc_dip(event=None, actions=None):
     for a in actions:
         buttons[f'penalty_{a}'].color = 'r'
-    mute_tonic_SNc(actions)
-    h.cvode.event(h.t + stim_intervals['SNc'], lambda actions=actions: restore_tonic_SNc(actions=actions)) 
+    update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
+    h.cvode.event(h.t + stim_intervals['SNc'], lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
 
-def start_burst_SNc(actions=None):
+def update_stimulus_activation(cell, stimulus, actions=None, active=True):
     if actions == None:
         actions = list(range(N_actions))
     i = 0
     for a in range(N_actions):
-        for _ in cells['SNc'][a]:
+        for _ in cells[cell][a]:
             if a in actions:
-                ncs['SNc_burst'][i].weight[0] = 2
-            i += 1
-
-def mute_burst_SNc(actions=None):
-    if actions == None:
-        actions = list(range(N_actions))
-    i = 0
-    for a in range(N_actions):
-        for _ in cells['SNc'][a]:
-            if a in actions:
-                ncs['SNc_burst'][i].weight[0] = 0
+                #ncs[stimulus][i].weight[0] = weight
+                ncs[stimulus][i].active(active)
             i += 1
 
 def SNc_burst(event=None, actions=None):
     for a in actions:
         buttons[f'reward_{a}'].color = 'g'
-    mute_tonic_SNc(actions)
-    start_burst_SNc(actions)
+    update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
+    update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=True) # start SNc burst stimulus
     n_spikes = 5
     delay = stim_intervals['SNc_burst'] * n_spikes
-    h.cvode.event(h.t + delay, lambda: mute_burst_SNc(actions))  
-    h.cvode.event(h.t + delay, lambda: restore_tonic_SNc(actions))  
+    h.cvode.event(h.t + delay, lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=False))  # stop SNc burst stimulus
+    h.cvode.event(h.t + delay, lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
 
-def analyse_firing_rate(cell, window=100):
+def analyse_firing_rate(cell, window=100, average=True):
     """Returns a list of firing rates (Hz) for each action's cell population."""
     current_time = h.t
+    rates_avg = []
     rates = []
     for a in range(N_actions):
-        spikes = 0
+        spikes_avg = 0
+        spikes = []
         for i in range(cell_numbers[cell]):
             spike_vec = spike_times[cell][a][i]
             # Count spikes in the last `window` ms
             recent_spikes = [t for t in spike_vec if current_time - window <= t <= current_time]
-            spikes += len(recent_spikes)
-        rate = spikes / (cell_numbers[cell] * (window / 1000.0))  # spikes/sec per neuron
-        rates.append(rate)
-        max_rate = 1000.0 / stim_intervals[cell]
-        rates_rel = [rate / max_rate for rate in rates]
-    return rates, rates_rel
+            if average:
+                spikes_avg += len(recent_spikes)
+            else:
+                spikes.append(len(recent_spikes))
+        if average:
+            rate_avg = spikes_avg / (cell_numbers[cell] * (window / 1000.0))  # spikes/sec per neuron
+            rates_avg.append(rate_avg)
+        else:
+            rate = [spike / (window / 1000.0) for spike in spikes]
+            rates.append(rate)
+
+    max_rate = 1000.0 / stim_intervals[cell]
+    
+    if average:
+        rates_rel_avg = [rate_avg / max_rate for rate_avg in rates_avg]
+        return rates_avg, rates_rel_avg
+    else:
+        rates_rel = [[r / max_rate for r in rate] for rate in rates]
+        return rates, rates_rel
 
 def toggle_pause(event=None):
     global paused
@@ -176,6 +165,7 @@ def toggle_target_action(event=None, action=None):
             target_actions.remove(action)
             buttons[f'target_{action}'].label.set_text('Set as\nTarget')
             buttons[f'target_{action}'].color = '0.85'
+            
         else:
             target_actions.append(action)
             buttons[f'target_{action}'].label.set_text('Target')
@@ -287,6 +277,32 @@ for a in range(N_actions):
         stims['SNc_burst'].append(stim)
         syns['SNc_burst'].append(syn)
         ncs['SNc_burst'].append(nc)
+for nc in ncs['SNc_burst']:
+    nc.active(False)
+
+# Additional stimuli for cortical input
+stims.update({'Cor_D1': []})
+stims.update({'Cor_D2': []})
+syns.update({'Cor_D1': []})
+syns.update({'Cor_D2': []})
+ncs.update({'Cor_D1': []})
+ncs.update({'Cor_D2': []})
+
+for a in range(N_actions):
+    for cell in cells['D1'][a]:
+        stim, syn, nc = create_stim(cell, start=0, interval=stim_intervals['Cor'], weight=stim_weights['Cor'])
+        stims['Cor_D1'].append(stim)
+        syns['Cor_D1'].append(syn)
+        ncs['Cor_D1'].append(nc)
+    for cell in cells['D2'][a]:
+        stim, syn, nc = create_stim(cell, start=0, interval=stim_intervals['Cor'], weight=stim_weights['Cor'])
+        stims['Cor_D2'].append(stim)
+        syns['Cor_D2'].append(syn)
+        ncs['Cor_D2'].append(nc)
+for nc in ncs['Cor_D1']:
+    nc.active(False)
+for nc in ncs['Cor_D2']:
+    nc.active(False)
 
 # Recording
 recordings = {ct: [[h.Vector().record(cell(0.5)._ref_v) for cell in cells[ct][a]] for a in range(N_actions)] for ct in cell_types}
@@ -425,7 +441,13 @@ while True:
         plt.pause(0.1)
         continue
 
-    elif int(h.t) != last_action_selection_time and int(h.t) % plot_time_range == plot_time_range/2:
+    if int(h.t) % plot_time_range == 0:
+        h.cvode.event(h.t + 100, lambda: update_stimulus_activation(cell='D1', stimulus='Cor_D1', actions=target_actions, active=True))  # start cortical input stimulus for that action
+        h.cvode.event(h.t + 100, lambda: update_stimulus_activation(cell='D2', stimulus='Cor_D2', actions=target_actions, active=True))  # start cortical input stimulus for that action
+        h.cvode.event(h.t + 300, lambda: update_stimulus_activation(cell='D1', stimulus='Cor_D1', actions=target_actions, active=False))  # stop cortical input stimulus for that action
+        h.cvode.event(h.t + 300, lambda: update_stimulus_activation(cell='D2', stimulus='Cor_D2', actions=target_actions, active=False))  # stop cortical input stimulus for that action
+
+    if int(h.t) != last_action_selection_time and int(h.t) % plot_time_range == plot_time_range/2:
         last_action_selection_time = h.t
         rates['Thal'], rates_rel['Thal'] = analyse_firing_rate('Thal')
         selected_actions = [i for i, rate_rel in enumerate(rates_rel['Thal']) if rate_rel > 0.5]
@@ -434,40 +456,45 @@ while True:
             buttons[f'selected_{action}'].label.set_text('Action\nselected')
             buttons[f'selected_{action}'].color = 'y'
 
-        #print(f"Time {h.t:.1f} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
+        print(f"Time {h.t:.1f} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
         correct_actions = list(set(target_actions) & set(selected_actions))
         incorrect_actions = list(set(target_actions) ^ set(selected_actions))
-        if len(correct_actions) > 0:
-            SNc_burst(event=None, actions=correct_actions)
-        if len(incorrect_actions) > 0:
-            SNc_dip(event=None, actions=incorrect_actions)
+        #if len(correct_actions) > 0:
+        #    SNc_burst(event=None, actions=correct_actions)
+        #if len(incorrect_actions) > 0:
+        #    SNc_dip(event=None, actions=incorrect_actions)
+        if set(selected_actions) == set(target_actions): # reward
+            SNc_burst(event=None, actions=[0,1,2])
+        else: # No reward
+            SNc_dip(event=None, actions=[0,1,2])
 
     elif int(h.t) != last_weight_update_time and int(h.t) % plot_time_range == 0:
         last_weight_update_time = h.t
         toggle_pause()
         rates['SNc'], rates_rel['SNc'] = analyse_firing_rate('SNc', window=plot_time_range)
-        rates['D1'], rates_rel['D1'] = analyse_firing_rate('D1', window=plot_time_range)
-        rates['D2'], rates_rel['D2'] = analyse_firing_rate('D2', window=plot_time_range)
+        rates['D1'], rates_rel['D1'] = analyse_firing_rate('D1', window=plot_time_range, average=False)
+        rates['D2'], rates_rel['D2'] = analyse_firing_rate('D2', window=plot_time_range, average=False)
         #print(f"Time {h.t:.1f} ms: Rates SNc = {rates['SNc']}, Rates SNc relative = {rates_rel['SNc']}, Rates relative D1 = {rates_rel['D1']}, Rates relative D2 = {rates_rel['D2']}")
 
         i, j = 0, 0
         for a in range(N_actions):
-            for _ in cells['SNc'][a]:
-                for _ in cells['D1'][a]:
-                    # DA facilitates active D1 and inhibits less active D1
-                    delta_w = rates_rel['D1'][a] * (rates_rel['SNc'][a] - 1) # baseline tonic firing rate of SNc corresponds to relative rate of 1
-                    ncs['SNc_to_D1'][i].weight[0] += 0.1 * delta_w
-                    ncs['SNc_to_D1'][i].weight[0] = max(0, ncs['SNc_to_D1'][i].weight[0]) # ensure weights are non-zero
-                    i += 1
-                for _ in cells['D2'][a]:
-                    # high DA increases inhibition, low DA suppresses inhibition
-                    delta_w = (rates_rel['SNc'][a] - 1) # baseline tonic firing rate of SNc corresponds to relative rate of 1
-                    ncs['SNc_to_D2'][j].weight[0] += 0.1 * delta_w
-                    ncs['SNc_to_D2'][j].weight[0] = max(0, ncs['SNc_to_D2'][j].weight[0]) # ensure weights are non-zero
-                    j += 1
+            print(f"Action {a}: rel rate D1 = {rates_rel['D1'][a]}, rel rate SNc = {rates_rel['SNc'][a]}")
+            #for _ in cells['SNc'][a]:
+            for n,_ in enumerate(cells['D1'][a]):
+                # DA facilitates active D1 and inhibits less active D1
+                delta_w = (rates_rel['D1'][a][n] - 1) * (rates_rel['SNc'][a] - 1) # baseline tonic firing rate corresponds to relative rate of 1
+                ncs['Cor_D1'][i].weight[0] += 0.1 * delta_w
+                ncs['Cor_D1'][i].weight[0] = max(0, ncs['Cor_D1'][i].weight[0]) # ensure weights are non-zero
+                i += 1
+            for _ in cells['D2'][a]:
+                # high DA increases inhibition, low DA suppresses inhibition
+                delta_w = (1 - rates_rel['SNc'][a]) # baseline tonic firing rate of SNc corresponds to relative rate of 1
+                ncs['Cor_D2'][j].weight[0] += 0.1 * delta_w
+                ncs['Cor_D2'][j].weight[0] = max(0, ncs['Cor_D2'][j].weight[0]) # ensure weights are non-zero
+                j += 1
 
-        print(f"{h.t:.0f}ms: SNc-D1-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['SNc_to_D1']]}")
-        print(f"{h.t:.0f}ms: SNc-D2-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['SNc_to_D2']]}")
+        print(f"{h.t:.0f}ms: Cor-D1-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_D1']]}")
+        print(f"{h.t:.0f}ms: Cor-D2-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_D2']]}")
         continue
         
     while (h.t - last_plot_update) < plot_interval:
@@ -500,7 +527,7 @@ while True:
                     rate = hist / (cell_numbers[ct] * bin_width / 1000.0)
                     bin_centers = (edges[:-1] + edges[1:]) / 2
                     offset = y_base + cell_numbers[ct] / 2
-                    spike_rate_max = 1000.0 / stim_intervals[ct] # Hz
+                    spike_rate_max = 100 #1000.0 / stim_intervals[ct] # Hz
                     rate_scaled = (rate) / (spike_rate_max + 1e-9)
                     rate_scaled = rate_scaled * (cell_numbers[ct] - 1) + y_base - cell_numbers[ct] + 1
                     rate_lines[ct][i].set_data(bin_centers, rate_scaled)
