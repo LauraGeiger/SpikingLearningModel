@@ -1,27 +1,70 @@
 import serial
 import time
+import threading
+import re
 
-# Replace with your actual COM port from Device Manager
-bluetooth_port = 'COM5'  # Example: COM5, COM6, etc.
-baud_rate = 115200         # Should match your Arduino's Serial.begin()
+bluetooth_port = 'COM12' #'COM10' for USB connection
+baud_rate = 9600 #115200 for USB connection
+
+set_servos = set()
+lock = threading.Lock()  # To safely update set_servos from both threads
+
+def read_from_serial(bt):
+    global set_servos
+    try:
+        while True:
+            if bt.in_waiting > 0:
+                data = bt.read(bt.in_waiting)
+                text = data.decode('latin-1', errors='ignore')
+                print(text, end='')
+
+                # Detect "set servo: X" messages
+                matches = re.findall(r'set servo:\s*(\d+)', text)
+                with lock:
+                    for m in matches:
+                        set_servos.add(int(m))
+
+            time.sleep(0.1)
+    except serial.SerialException:
+        print("Serial port error or disconnected.")
+    except Exception as e:
+        print(f"Error in reading thread: {e}")
 
 try:
-    # Open serial connection
     bt = serial.Serial(bluetooth_port, baud_rate)
-    time.sleep(2)  # Wait for connection to stabilize
+    time.sleep(2)
 
-    print("Connected. Sending command...")
+    print("Connected. Receiving messages...")
 
-    # Send command
-    #command = 'A'  # You can replace this with any command string
-    #bt.write(command.encode())
+    #reader_thread = threading.Thread(target=read_from_serial, args=(bt,), daemon=True)
+    #reader_thread.start()
 
-    # Read response (optional)
-    if bt.in_waiting:
-        response = bt.readline().decode().strip()
-        print("Received:", response)
+    commands = [
+        '0-1-i/0-6-i/0-13-i/0-9-i/0-11-i/3250-1-o/3250-6-o/3250-13-o/3250-9-o/3250-11-o/',
+        'S'
+    ]
+    index = 0
 
-    bt.close()
+    while True:
+        input("Press Enter to send command...")
+
+        with lock:
+        #    if set_servos >= set(range(1, 13)):
+            command = commands[index]
+            bt.write(command.encode())
+            print(f"\nCommand sent: {command}")
+            index = 1
+            time.sleep(1)
+        #    else:
+        #        print("Not all servos are set yet. Command not sent.")
+
+except KeyboardInterrupt:
+    print("\nCtrl-C pressed. Closing connection...")
 
 except serial.SerialException as e:
     print(f"Could not open port {bluetooth_port}: {e}")
+
+finally:
+    if 'bt' in locals() and bt.is_open:
+        bt.close()
+        print("Connection closed.")
