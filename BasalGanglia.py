@@ -17,8 +17,8 @@ connection_types = ['SNc_to_MSNd', 'SNc_to_MSNi', 'MSNd_to_GPi', 'MSNi_to_GPe', 
 # Tonic stimulation for all cells
 stim_intervals = {
     'SNc'       : 1000 / 5,  #  5 Hz
-    'MSNd'        : 1000 / 5,  #  5 Hz (tonic baseline)
-    'MSNi'        : 1000 / 5,  #  5 Hz (tonic baseline)
+    'MSNd'      : 1000 / 5,  #  5 Hz (tonic baseline)
+    'MSNi'      : 1000 / 5,  #  5 Hz (tonic baseline)
     'GPe'       : 25,#12.5,  # 80 Hz
     'GPi'       : 25,#10,    # 100 Hz
     'Thal'      : 1000 / 20, # 20 Hz
@@ -40,12 +40,12 @@ stims, syns, ncs = {}, {}, {}
 
 # Define connection specifications
 connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
-    ('SNc', 'MSNd',   'SNc_to_MSNd',      0, 0,    10, 1),   # excitatory
-    ('SNc', 'MSNi',   'SNc_to_MSNi',    -85, 0,    10, 1),   # inhibitory
-    ('MSNd',  'GPi',  'MSNd_to_GPi',    -85, 0.1,  10, 1),   # inhibitory
-    ('MSNi',  'GPe',  'MSNi_to_GPe',    -85, 0.1,  10, 1),   # inhibitory
-    ('GPe', 'GPi',  'GPe_to_GPi',   -85, 0.05, 10, 1),   # inhibitory
-    ('GPi', 'Thal', 'GPi_to_Thal',  -85, 0.1,  10, 1)    # inhibitory
+    ('SNc', 'MSNd', 'SNc_to_MSNd',   0, 0,    10, 1),   # excitatory
+    ('SNc', 'MSNi', 'SNc_to_MSNi', -85, 0,    10, 1),   # inhibitory
+    ('MSNd', 'GPi', 'MSNd_to_GPi', -85, 0.1,  10, 1),   # inhibitory
+    ('MSNi', 'GPe', 'MSNi_to_GPe', -85, 0.1,  10, 1),   # inhibitory
+    ('GPe',  'GPi',  'GPe_to_GPi', -85, 0.05, 10, 1),   # inhibitory
+    ('GPi', 'Thal', 'GPi_to_Thal', -85, 0.1,  10, 1)    # inhibitory
 ]
 
 N_actions = 3
@@ -93,10 +93,7 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2):
     nc.delay = 1
     return stim, syn, nc
 
-
 def SNc_dip(event=None, actions=None):
-    #for a in actions:
-    #    buttons[f'penalty_{a}'].color = 'r'
     update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
     h.cvode.event(h.t + stim_intervals['SNc'], lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
 
@@ -107,13 +104,10 @@ def update_stimulus_activation(cell, stimulus, actions=None, active=True):
     for a in range(N_actions):
         for _ in cells[cell][a]:
             if a in actions:
-                #ncs[stimulus][i].weight[0] = weight
                 ncs[stimulus][i].active(active)
             i += 1
 
 def SNc_burst(event=None, actions=None):
-    #for a in actions:
-    #    buttons[f'reward_{a}'].color = 'g'
     update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
     update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=True) # start SNc burst stimulus
     n_spikes = 5
@@ -160,12 +154,11 @@ def toggle_pause(event=None):
     if not paused:
         buttons['pause'].color = '0.85'
         for a in range(N_actions):
-            #buttons[f'penalty_{a}'].color = '0.85'
-            #buttons[f'reward_{a}'].color = '0.85'
             buttons[f'selected_{a}'].label.set_text('Action not\nselected')
             buttons[f'selected_{a}'].color = '0.85'
     else:
         buttons['pause'].color = 'c'
+    fig.canvas.draw_idle()
 
 def toggle_target_action(event=None, action=None):
     if action != None:
@@ -178,45 +171,13 @@ def toggle_target_action(event=None, action=None):
             target_actions.append(action)
             buttons[f'target_{action}'].label.set_text('Target')
             buttons[f'target_{action}'].color = 'y'
+        fig.canvas.draw_idle()
 
 def update_stim(noise):
     for ct in cell_types:
         for stim in stims[ct]:
             stim.noise = noise
-'''
-def update_d1_mode(label, action_idx):
-    d1_modes[action_idx] = label
-    update_d1_weights(action_idx)
 
-def update_d2_mode(label, action_idx):
-    d2_modes[action_idx] = label
-    update_d2_weights(action_idx)
-
-def update_d1_weights(action_idx):
-    start = action_idx * cell_numbers['MSNd']
-    end = start + cell_numbers['MSNd']
-    mode = d1_modes[action_idx]
-    for nc in ncs['MSNd'][start:end]:
-        if mode == 'OFF':
-            nc.weight[0] = 0
-        elif mode == 'ON':
-            nc.weight[0] = 2
-        elif mode == 'RAND':
-            nc.weight[0] = random.uniform(0, 2)
-
-def update_d2_weights(action_idx):
-    start = action_idx * cell_numbers['MSNi']
-    end = start + cell_numbers['MSNi']
-    mode = d2_modes[action_idx]
-
-    for nc in ncs['MSNi'][start:end]:
-        if mode == 'OFF':
-            nc.weight[0] = 0
-        elif mode == 'ON':
-            nc.weight[0] = 2
-        elif mode == 'RAND':
-            nc.weight[0] = random.uniform(0, 2)
-'''
 #--- Network ------------------------------------------------------------------------------------------------------------------------------------------#
 
 # Create neuron populations
@@ -414,47 +375,17 @@ noise_slider = Slider(ax_noise, 'Noise', 0, 1, valinit=0, valstep=0.1)
 noise_slider.on_changed(update_stim)
 
 #--- Upper control panel ---#
-
-# States: OFF: weight=0, ON:weight=2, RAND: weight=random(0-2)
-#options = ['OFF', 'ON', 'RAND']
-#d1_modes = ['OFF'] * N_actions 
-#d2_modes = ['OFF'] * N_actions
-
 for a in range(N_actions):
-    # Create axis for MSNd radio buttons
-    #ax_d1 = axs[row_control_upper][col_potential+a].inset_axes([0.1,0.55,0.25,0.45])
-    #ax_d1.text(-0.1, 0, 'MSNd', verticalalignment='center')
-    #buttons[f'MSNd_{a}'] = RadioButtons(ax_d1, options, active=options.index(d1_modes[a]))
-    #buttons[f'MSNd_{a}'].on_clicked(lambda label, a=a: update_d1_mode(label, a))
-
-    # Create axis for MSNi radio buttons
-    #ax_d2 = axs[row_control_upper][col_potential+a].inset_axes([0.1,0,0.25,0.45])
-    #ax_d2.text(-0.1, 0, 'MSNi', verticalalignment='center')
-    #buttons[f'MSNi_{a}'] = RadioButtons(ax_d2, options, active=options.index(d1_modes[a]))
-    #buttons[f'MSNi_{a}'].on_clicked(lambda label, a=a: update_d2_mode(label, a))
-
     # Target button
     ax_target = axs[row_control_upper][col_potential+a].inset_axes([0.4,0,0.3,1])
     buttons[f'target_{a}'] = Button(ax_target, 'Set as\nTarget')
     buttons[f'target_{a}'].on_clicked(lambda event, a=a: toggle_target_action(event=event, action=a))
 
-    # Penalty button
-    #ax_penalty = axs[row_control_upper][col_potential+a].inset_axes([0.75,0.55,0.25,0.45])
-    #buttons[f'penalty_{a}'] = Button(ax_penalty, 'Penalty')
-    #buttons[f'penalty_{a}'].on_clicked(lambda event, a=a: SNc_dip(event=event, actions=[a]))
-
-    # Reward button
-    #ax_reward = axs[row_control_upper][col_potential+a].inset_axes([0.75,0,0.25,0.45])
-    #buttons[f'reward_{a}'] = Button(ax_reward, 'Reward')
-    #buttons[f'reward_{a}'].on_clicked(lambda event, a=a: SNc_burst(event=event, actions=[a]))
-
 #--- Lower control panel ---#
-
 for a in range(N_actions):
     ax_selected = axs[row_control_lower][col_potential+a].inset_axes([0.4,0,0.3,1])
     buttons[f'selected_{a}'] = Button(ax_selected, 'Action not\nselected')
     
-
 #--- Simulation ---------------------------------------------------------------------------------------------------------------------------------------------------#
 h.dt = 0.1
 h.finitialize()
@@ -465,6 +396,8 @@ last_weight_update_time = 0
 while True:
     if paused or len(target_actions) == 0:
         time.sleep(0.1)
+        fig.canvas.draw_idle()   
+        fig.canvas.flush_events()
         plt.pause(0.1)
         continue
 
@@ -483,7 +416,7 @@ while True:
             buttons[f'selected_{action}'].label.set_text('Action\nselected')
             buttons[f'selected_{action}'].color = 'y'
 
-        print(f"Time {last_action_selection_time} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
+        print(f"{last_action_selection_time} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
         correct_actions = list(set(target_actions) & set(selected_actions))
         incorrect_actions = list(set(target_actions) ^ set(selected_actions))
         
@@ -497,36 +430,15 @@ while True:
             
             input_key = f"{action}{action in target_actions}"
             if input_key not in expected_reward:
-                expected_reward[input_key] = 0.5
+                expected_reward[input_key] = 0.2
             expected_reward[input_key] += 0.1 * (reward - expected_reward[input_key])
             DA_signal[action] = round(reward - expected_reward[input_key], 2) # round to 2 digits after comma
             if DA_signal[action] > 0:
                 SNc_burst(event=None, actions=[action])
             elif DA_signal[action] < 0:
                 SNc_dip(event=None, actions=[action])
-        #for action in incorrect_actions:
-        #    reward = 0
-        #    buttons[f'selected_{action}'].color = 'r'
-        
-        #if set(selected_actions) == set(target_actions): # reward
-        #    reward = 1
-        #    print("Reward")
-        #    #SNc_burst(event=None, actions=[0,1,2])
-        #else: # No reward
-        #    reward = 0
-        #    print("No reward")
-        #    #SNc_dip(event=None, actions=[0,1,2])
-        
-        #input_key = frozenset(target_actions)
-        #if input_key not in expected_reward:
-        #    expected_reward[input_key] = 0.5
-        #expected_reward[input_key] += 0.1 * (reward - expected_reward[input_key])
-        #DA_signal = reward - expected_reward[input_key]
-        #if DA_signal > 0:
-        #    SNc_burst(event=None, actions=[0,1,2])
-        #elif DA_signal < 0:
-        #    SNc_dip(event=None, actions=[0,1,2])
-        print(expected_reward)
+        fig.canvas.draw_idle()
+        plt.pause(0.5)
 
     elif int(h.t) != last_weight_update_time and int(h.t) % plot_time_range == 0:
         last_weight_update_time = int(h.t)
@@ -534,32 +446,29 @@ while True:
         rates['SNc'], rates_rel['SNc'] = analyse_firing_rate('SNc', window=plot_time_range)
         rates['MSNd'], rates_rel['MSNd'] = analyse_firing_rate('MSNd', window=plot_time_range, average=False)
         rates['MSNi'], rates_rel['MSNi'] = analyse_firing_rate('MSNi', window=plot_time_range, average=False)
-        #print(f"Time {h.t:.1f} ms: Rates SNc = {rates['SNc']}, Rates SNc relative = {rates_rel['SNc']}, Rates relative MSNd = {rates_rel['MSNd']}, Rates relative MSNi = {rates_rel['MSNi']}")
 
+        learning_rate = 0.05
         i, j = 0, 0
         for a in range(N_actions):
-            print(f"Action {a}: rel rate MSNd = {rates_rel['MSNd'][a]}, rel rate SNc = {rates_rel['SNc'][a]}, DA signal = {DA_signal[a]}")
+            print(f"{last_weight_update_time} ms: Action {a}: rel rate MSNd = {rates_rel['MSNd'][a]}, rel rate SNc = {rates_rel['SNc'][a]}, Expected Reward = {expected_reward[f'{a}{a in target_actions}']:.2f}, DA = {DA_signal[a]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNd'][a*cell_numbers['MSNd']:(a+1)*cell_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNi'][a*cell_numbers['MSNi']:(a+1)*cell_numbers['MSNi']]]}")
             for n,_ in enumerate(cells['MSNd'][a]):
                 # Update weight: DA facilitates active MSNd and inhibits less active MSNd
                 #delta_w = (rates_rel['MSNd'][a][n] - 1) * DA_signal[a] #(rates_rel['SNc'][a] - 1) # baseline tonic firing rate corresponds to relative rate of 1
-                delta_w = (rates_rel['MSNd'][a][n]) * DA_signal[a] 
-                ncs['Cor_MSNd'][i].weight[0] += 0.1 * delta_w
+                delta_w = learning_rate * (rates_rel['MSNd'][a][n]) * DA_signal[a] 
+                ncs['Cor_MSNd'][i].weight[0] += delta_w
                 ncs['Cor_MSNd'][i].weight[0] = max(0, ncs['Cor_MSNd'][i].weight[0]) # ensure weights are non-zero
                 
                 i += 1
             for m,_ in enumerate(cells['MSNi'][a]):
                 # Update weight: high DA increases inhibition, low DA suppresses inhibition
-                delta_w = - DA_signal[a] # (1 - rates_rel['SNc'][a]) # baseline tonic firing rate of SNc corresponds to relative rate of 1
-                ncs['Cor_MSNi'][j].weight[0] += 0.1 * delta_w
+                delta_w = learning_rate * (- DA_signal[a]) # (1 - rates_rel['SNc'][a]) # baseline tonic firing rate of SNc corresponds to relative rate of 1
+                ncs['Cor_MSNi'][j].weight[0] += delta_w
                 ncs['Cor_MSNi'][j].weight[0] = max(0, ncs['Cor_MSNi'][j].weight[0]) # ensure weights are non-zero
                 j += 1
 
-        print(f"{last_weight_update_time}ms: Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNd']]}")
-        print(f"{last_weight_update_time}ms: Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNi']]}")
         continue
         
-    while (int(h.t) - last_plot_update) < plot_interval:
-        h.fadvance()
+    h.continuerun(h.t + plot_interval)
 
     last_plot_update = int(h.t)
     t_array = np.array(t_vec)
@@ -610,5 +519,7 @@ while True:
         all_weights = [w for lst in weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
         ymin, ymax = min(all_weights), max(all_weights)
         axs[row_weights][col_weights+i].set_ylim(ymin*0.9, ymax*1.1)
-        
-    plt.pause(0.01)
+
+    fig.canvas.draw_idle()   
+    fig.canvas.flush_events() 
+    plt.pause(0.001)
