@@ -22,11 +22,11 @@ cell_types = list(cell_types_numbers.keys())
 # Tonic stimulation for all cells
 stim_intervals = {
     'SNc'       : 1000 / 5,  #  5 Hz
-    'MSNd'      : 1000 / 5,  #  5 Hz (tonic baseline)
-    'MSNi'      : 1000 / 5,  #  5 Hz (tonic baseline)
-    'GPe'       : 25,#12.5,  # 80 Hz
-    'GPi'       : 25,#10,    # 100 Hz
-    'Thal'      : 1000 / 20, # 20 Hz
+    'MSNd'      : 1000 / 7.4,  #  5 Hz (tonic baseline)
+    'MSNi'      : 1000 / 3.5,  #  5 Hz (tonic baseline)
+    'GPe'       : 1000 / 48,#12.5,  # 80 Hz
+    'GPi'       : 1000 / 69,#10,    # 100 Hz
+    'Thal'      : 1000 / 14, # 20 Hz
     'SNc_burst' : 1000 / 50, # 50 Hz
     'Cor'       : 1000 / 40  # 40 Hz (cortical input stimulation)
 }
@@ -37,7 +37,7 @@ stim_weights = {
     'MSNi'      : 2,
     'GPe'       : 2,
     'GPi'       : 2,
-    'Thal'      : 2,
+    'Thal'      : 4,
     'SNc_burst' : 2,
     'Cor'       : 1.8
 }
@@ -79,7 +79,7 @@ plot_interval = 400  # ms
 channels_to_plot = [i for i in range(N_actions)]
 bin_width_firing_rate = 100  # ms
 cortical_input_start = 1/8 * plot_interval
-cortical_input_stop = 5/8 * plot_interval
+cortical_input_stop = 7/8 * plot_interval
 simulation_stop_time = 20000 # ms
 
 buttons = {}
