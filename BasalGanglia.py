@@ -1,11 +1,16 @@
 from neuron import h#, gui
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Button, CheckButtons, Slider, RadioButtons
+from matplotlib.widgets import Button, Slider, CheckButtons, RadioButtons
 import matplotlib.gridspec as gridspec
 import numpy as np
 import time
 from openpyxl import Workbook
 from datetime import datetime
+
+# --- TODO --------------------------------------------------#
+# determine dopamine level from rel SNc rate
+# --- TODO --------------------------------------------------#
+
 
 h.load_file("stdrun.hoc")
 h.cvode_active(1)
@@ -23,18 +28,18 @@ stim_intervals = {
     'GPi'       : 25,#10,    # 100 Hz
     'Thal'      : 1000 / 20, # 20 Hz
     'SNc_burst' : 1000 / 50, # 50 Hz
-    'Cor'       : 1000 / 40  # 40 Hz
+    'Cor'       : 1000 / 40  # 40 Hz (cortical input stimulation)
 }
 
 stim_weights = {
-    'SNc' : 2,
-    'MSNd'  : 2,
-    'MSNi'  : 2,
-    'GPe' : 2,
-    'GPi' : 2,
-    'Thal': 2,
-    'SNc_burst': 2,
-    'Cor': 1.8
+    'SNc'       : 2,
+    'MSNd'      : 2,
+    'MSNi'      : 2,
+    'GPe'       : 2,
+    'GPi'       : 2,
+    'Thal'      : 2,
+    'SNc_burst' : 2,
+    'Cor'       : 1.8
 }
 stims, syns, ncs = {}, {}, {}
 
@@ -42,8 +47,8 @@ stims, syns, ncs = {}, {}, {}
 connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
     ('SNc', 'MSNd', 'SNc_to_MSNd',   0, 0,    10, 1),   # excitatory
     ('SNc', 'MSNi', 'SNc_to_MSNi', -85, 0,    10, 1),   # inhibitory
-    ('MSNd', 'GPi', 'MSNd_to_GPi', -85, 0.1,  10, 1),   # inhibitory
-    ('MSNi', 'GPe', 'MSNi_to_GPe', -85, 0.1,  10, 1),   # inhibitory
+    ('MSNd', 'GPi', 'MSNd_to_GPi', -85, 0.5,  10, 1),   # inhibitory
+    ('MSNi', 'GPe', 'MSNi_to_GPe', -85, 0.2,  10, 1),   # inhibitory
     ('GPe',  'GPi',  'GPe_to_GPi', -85, 0.05, 10, 1),   # inhibitory
     ('GPi', 'Thal', 'GPi_to_Thal', -85, 0.1,  10, 1)    # inhibitory
 ]
@@ -52,14 +57,14 @@ N_actions = 3
 paused = False
 target_actions = []
 noise = 0
-selection_threshold = 0.5
+selection_threshold = 0.7
 n_spikes_SNc_burst = 5
 learning_rate = 0.05
 reward_times = []
 expected_reward_over_time = {}
 expected_reward_value = 0.2
 reward_over_time = {}
-DA_over_time = {}
+dopamine_over_time = {}
 weight_cell_types = ['MSNd', 'MSNi']
 weight_times = []
 weights_over_time = {(ct, a, i): [] 
@@ -70,17 +75,18 @@ weights_over_time = {(ct, a, i): []
 apc_refs = []
 
 # Plotting setup
-plot_interval = 200  # ms
-plot_time_range = 400  # ms
+plot_interval = 400  # ms
 channels_to_plot = [i for i in range(N_actions)]
 bin_width_firing_rate = 100  # ms
-cortical_input_start = 1/4 * plot_time_range
-cortical_input_stop = 3/4 * plot_time_range
-simulation_stop_time = 10000 # ms
+cortical_input_start = 1/8 * plot_interval
+cortical_input_stop = 5/8 * plot_interval
+simulation_stop_time = 20000 # ms
 
 buttons = {}
 rates = {}
 rates_rel = {}
+
+output = False # Set to True (print values in the terminal) or False (no printing)
 
 #--- Functions ------------------------------------------------------------------------------------------------------------------------------------------------#
 
@@ -166,9 +172,6 @@ def toggle_pause(event=None):
     buttons['pause'].label.set_text('Continue' if paused else 'Pause')
     if not paused:
         buttons['pause'].color = '0.85'
-        for a in range(N_actions):
-            buttons[f'selected_{a}'].label.set_text('Action not\nselected')
-            buttons[f'selected_{a}'].color = '0.85'
     else:
         buttons['pause'].color = 'c'
     fig.canvas.draw_idle()
@@ -278,6 +281,15 @@ for ct in weight_cell_types:
     for nc in ncs[f'Cor_{ct}']:
         nc.active(False)
 
+# Reward initialization
+reward_times.append(0)
+for action in range(N_actions):
+    for target in [True, False]:
+        input_key = f"{action}{target}"
+        expected_reward_over_time[input_key] = [expected_reward_value]
+    reward_over_time[action] = [0]
+    dopamine_over_time[action] = [0]
+
 # Recording
 recordings = {ct: [[h.Vector().record(cell(0.5)._ref_v) for cell in cells[ct][a]] for a in range(N_actions)] for ct in cell_types}
 t_vec = h.Vector().record(h._ref_t)
@@ -287,20 +299,21 @@ t_vec = h.Vector().record(h._ref_t)
 plt.ion()
 fig = plt.figure(figsize=(13, 8))
 rows = 5
-gs = gridspec.GridSpec(rows, 1+len(channels_to_plot), height_ratios=[2]+[4]*(rows-2)+[1], width_ratios=[0.3]+[1]*len(channels_to_plot))
+gs = gridspec.GridSpec(rows, 1+len(channels_to_plot), height_ratios=[2]+[4]*(rows-1), width_ratios=[0.3]+[1]*len(channels_to_plot))
 axs = [[fig.add_subplot(gs[i, j]) for j in range(1+len(channels_to_plot))] for i in range(rows)]
-[row_control_upper, row_potential, row_spike, row_weights, row_control_lower] = list(range(rows))
+[row_control_upper, row_potential, row_spike, row_weights, row_reward] = list(range(rows))
 col_potential = 1
 col_spike = 1
 col_weights = 1
+col_reward = 1
 
 # Deactivate axis for non-plot axes
 for row in range(rows):
-    if row == row_potential or row == row_spike or row == row_weights:
-        axs[row][0].set_axis_off()
-    else:
+    if row == 0: # first row are control panels
         for ax in axs[row]:
-            ax.set_axis_off()
+            ax.set_axis_off() # deactivate axis
+    else:
+        axs[row][0].set_axis_off() # left column is also control panel
 
 # Membrane potential plot
 axs[row_potential][col_potential].set_ylabel('Membrane potential (mV)')
@@ -313,7 +326,7 @@ for i, ch in enumerate(channels_to_plot):
 
     axs[row_potential][col_potential+i].set_title(f'Action {ch}')
     axs[row_potential][col_potential+i].legend(loc='upper right')
-    axs[row_potential][col_potential+i].set_xlim(0, plot_time_range)
+    axs[row_potential][col_potential+i].set_xlim(0, plot_interval)
     axs[row_potential][col_potential+i].set_ylim(-85, 65)
 
 # Spike raster plot and rate lines
@@ -343,12 +356,11 @@ for i, ch in enumerate(channels_to_plot):
         cumulative += cell_types_numbers[ct] 
     axs[row_spike][col_spike+i].set_yticks(yticks)
     axs[row_spike][col_spike+i].set_yticklabels(cell_types)
-    axs[row_spike][col_spike+i].set_xlim(0, plot_time_range)
-    axs[row_spike][col_spike+i].set_xlabel('Simulation time (ms)')
+    axs[row_spike][col_spike+i].set_xlim(0, plot_interval)
     axs[row_spike][col_spike+i].legend(loc='upper right')
 
 # Weight plot
-axs[row_weights][col_weights].set_ylabel('Cortical Input Weight')
+axs[row_weights][col_weights].set_ylabel('Cortical input weight')
 weight_lines = {ct: [[] for _ in range(N_actions)] for ct in weight_cell_types}
 
 for i, ch in enumerate(channels_to_plot):
@@ -360,10 +372,28 @@ for i, ch in enumerate(channels_to_plot):
                 line, = axs[row_weights][col_weights+i].plot([], [], f'C{j}', label=label)
                 weight_lines[ct][i].append(line)
 
-    axs[row_weights][col_weights+i].set_title(f'Action {ch}')
     axs[row_weights][col_weights+i].legend(loc='upper right')
-    axs[row_weights][col_weights+i].set_xlim(0, plot_time_range)
+    axs[row_weights][col_weights+i].set_xlim(0, plot_interval)
     axs[row_weights][col_weights+i].set_ylim(0, 3)
+
+# Reward plot
+axs[row_reward][col_reward].set_ylabel('Dopamine')
+expected_reward_lines = [[] for _ in range(N_actions)]
+reward_lines = [[] for _ in range(N_actions)]
+dopamine_lines = [[] for _ in range(N_actions)]
+
+for i, ch in enumerate(channels_to_plot):
+    expected_reward_line, = axs[row_reward][col_reward+i].plot([], [], 'C9', label='Expected Reward')
+    reward_line, = axs[row_reward][col_reward+i].plot([], [], 'C8', label='Reward')
+    dopamine_line, = axs[row_reward][col_reward+i].plot([], [], 'C6', label='Dopamine')
+    expected_reward_lines[i].append(expected_reward_line)
+    reward_lines[i].append(reward_line)
+    dopamine_lines[i].append(dopamine_line)
+
+    axs[row_reward][col_reward+i].legend(loc='upper right')
+    axs[row_reward][col_reward+i].set_xlabel('Simulation time (ms)')
+    axs[row_reward][col_reward+i].set_xlim(0, plot_interval)
+    axs[row_reward][col_reward+i].set_ylim(-1.1, 1.1)
 
 #--- Left control panel ---#
 ax_pause = axs[row_control_upper][0].inset_axes([0,0.5,1,0.45])
@@ -381,10 +411,6 @@ for a in range(N_actions):
     buttons[f'target_{a}'] = Button(ax_target, 'Set as\nTarget')
     buttons[f'target_{a}'].on_clicked(lambda event, a=a: toggle_target_action(event=event, action=a))
 
-#--- Lower control panel ---#
-for a in range(N_actions):
-    ax_selected = axs[row_control_lower][col_potential+a].inset_axes([0.4,0,0.3,1])
-    buttons[f'selected_{a}'] = Button(ax_selected, 'Action not\nselected')
 
 plt.show()
 plt.tight_layout()
@@ -393,9 +419,13 @@ plt.tight_layout()
 h.dt = 0.1
 h.finitialize()
 
-last_action_selection_time = 0
-last_weight_update_time = 0
+# Define cortical input stimuli
+h.cvode.event(h.t + cortical_input_start, lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=target_actions, active=True))  # start cortical input stimulus for that action
+h.cvode.event(h.t + cortical_input_stop,  lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=target_actions, active=False)) # stop cortical input stimulus for that action
+h.cvode.event(h.t + cortical_input_start, lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=target_actions, active=True))  # start cortical input stimulus for that action
+h.cvode.event(h.t + cortical_input_stop,  lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=target_actions, active=False)) # stop cortical input stimulus for that action
 
+state = 0  
 try:
     while True:
         if paused or len(target_actions) == 0:
@@ -406,135 +436,139 @@ try:
             plt.pause(0.1)
             continue
 
-        if int(h.t) > 0 and int(h.t) % simulation_stop_time == 0:
-            toggle_pause()
+        # Run simulation for half of the interval
+        h.continuerun(h.t + plot_interval // 2)
 
-        if int(h.t) % plot_time_range == 0:
+        # --- Action selection and SNc dip/burst trigger ---#
+        if state == 0: # executed after half time of plot_interval
+            
+            # Select actions
+            rates['Thal'], rates_rel['Thal'] = analyse_firing_rate('Thal')
+            selected_actions = [i for i, rate_rel in enumerate(rates_rel['Thal']) if rate_rel > selection_threshold]
+            if output: print(f"{int(h.t)} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
+            
+            correct_actions = list(set(target_actions) & set(selected_actions))
+            incorrect_actions = list(set(target_actions) ^ set(selected_actions))
+            reward_times.append(int(h.t))
+            for action in range(N_actions):
+                # Determine reward
+                if  not ((action in target_actions) ^ (action in selected_actions)): #XNOR
+                    reward_over_time[action].append(1)
+                else:
+                    reward_over_time[action].append(0)
+
+                # Trigger SNc dips or bursts based on difference between actual reward and expected reward
+                input_key = f"{action}{action in target_actions}"
+                current_expected_reward = expected_reward_over_time[input_key][-1]
+                dopamine_over_time[action].append(round(reward_over_time[action][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
+                if reward_over_time[action][-1] - current_expected_reward > 0:
+                    SNc_burst(event=None, actions=[action])
+                elif reward_over_time[action][-1] - current_expected_reward < 0:
+                    SNc_dip(event=None, actions=[action])
+
+                # Update expected reward based on actual reward
+                expected_reward_over_time[input_key].append(round(current_expected_reward + 0.1 * (reward_over_time[action][-1] - current_expected_reward), 4))
+
+        # --- Weight and plot update ---#  
+        else: # executed after full time of plot_interval
+
             # Define cortical input stimuli
             h.cvode.event(h.t + cortical_input_start, lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=target_actions, active=True))  # start cortical input stimulus for that action
             h.cvode.event(h.t + cortical_input_stop,  lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=target_actions, active=False)) # stop cortical input stimulus for that action
             h.cvode.event(h.t + cortical_input_start, lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=target_actions, active=True))  # start cortical input stimulus for that action
             h.cvode.event(h.t + cortical_input_stop,  lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=target_actions, active=False)) # stop cortical input stimulus for that action
             
-            if int(h.t) > weight_times[-1]:
-                # Update weights
-                weight_times.append(int(h.t))
-                rates['SNc'], rates_rel['SNc'] = analyse_firing_rate('SNc', window=plot_time_range)
-                rates['MSNd'], rates_rel['MSNd'] = analyse_firing_rate('MSNd', window=plot_time_range, average=False)
-                rates['MSNi'], rates_rel['MSNi'] = analyse_firing_rate('MSNi', window=plot_time_range, average=False)
+            # Analyse firing rates
+            rates['SNc'], rates_rel['SNc'] = analyse_firing_rate('SNc', window=plot_interval)
+            rates['MSNd'], rates_rel['MSNd'] = analyse_firing_rate('MSNd', window=plot_interval, average=False)
+            rates['MSNi'], rates_rel['MSNi'] = analyse_firing_rate('MSNi', window=plot_interval, average=False)
 
-                for a in range(N_actions):
-                    for ct in weight_cell_types:
-                        for k in range(cell_types_numbers[ct]):
-                            delta_w = 0
-                            if ct == 'MSNd':
-                                # DA facilitates active MSNd and inhibits less active MSNd
-                                delta_w = learning_rate * (rates_rel[ct][a][k] - 1) * DA_over_time[a][-1] # rel_rate = 1 corresponds to tonic baseline activity
-                            elif ct == 'MSNi':
-                                # high DA increases inhibition, low DA suppresses inhibition
-                                delta_w = learning_rate * (- DA_over_time[a][-1])
-                            idx = a * cell_types_numbers[ct] + k
-                            ncs[f'Cor_{ct}'][idx].weight[0] += delta_w # Update weight
-                            ncs[f'Cor_{ct}'][idx].weight[0] = max(0, ncs[f'Cor_{ct}'][idx].weight[0]) # ensure weights are non-zero
-                            weights_over_time[(ct, a, k)].append(round(ncs[f'Cor_{ct}'][idx].weight[0], 4))
-                    print(f"{weight_times[-1]} ms: Action {a}: rel rate MSNd = {rates_rel['MSNd'][a]}, rel rate SNc = {rates_rel['SNc'][a]}, Expected Reward = {expected_reward_over_time[f'{a}{a in target_actions}'][-1]:.2f}, DA = {DA_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNd'][a*cell_types_numbers['MSNd']:(a+1)*cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNi'][a*cell_types_numbers['MSNi']:(a+1)*cell_types_numbers['MSNi']]]}")               
-                    
+            # TODO: set dopamine value based on relative SNc rate (lenth of dip and burst to be adapted)
+            #print(f"dopamine over time: {dopamine_over_time}")
+            #print(f"rel SNc rate: {rates_rel['SNc']}")
 
-        elif int(h.t) >= last_action_selection_time + plot_time_range // 2:
-            # Select action and trigger SNc dips or bursts based on difference between expected reward and actual reward
-            last_action_selection_time = int(h.t)
-            rates['Thal'], rates_rel['Thal'] = analyse_firing_rate('Thal')
-            selected_actions = [i for i, rate_rel in enumerate(rates_rel['Thal']) if rate_rel > selection_threshold]
-
-            for action in selected_actions:
-                buttons[f'selected_{action}'].label.set_text('Action\nselected')
-                buttons[f'selected_{action}'].color = 'y'
-
-            print(f"{last_action_selection_time} ms: Target Actions = {target_actions}, Selected Actions = {selected_actions}, Rates Thal = {rates['Thal']}, Rates Thal relative = {rates_rel['Thal']}")
-            correct_actions = list(set(target_actions) & set(selected_actions))
-            incorrect_actions = list(set(target_actions) ^ set(selected_actions))
+            # Update weights
+            weight_times.append(int(h.t))
+            for a in range(N_actions):
+                for ct in weight_cell_types:
+                    for k in range(cell_types_numbers[ct]):
+                        delta_w = 0
+                        if ct == 'MSNd':
+                            # dopamine facilitates active MSNd and inhibits less active MSNd
+                            delta_w = learning_rate * (rates_rel[ct][a][k] - 1) * dopamine_over_time[a][-1] # rel_rate = 1 corresponds to tonic baseline activity
+                        elif ct == 'MSNi':
+                            # high dopamine increases inhibition, low dopamine suppresses inhibition
+                            delta_w = learning_rate * (- dopamine_over_time[a][-1])
+                        idx = a * cell_types_numbers[ct] + k
+                        new_weight = max(0, weights_over_time[(ct, a, k)][-1] + delta_w) # Update weight ensure weight is non-zero
+                        weights_over_time[(ct, a, k)].append(round(new_weight, 4))
+                        ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
+                        ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
+                if output: print(f"{weight_times[-1]} ms: Action {a}: rel rate MSNd = {rates_rel['MSNd'][a]}, rel rate SNc = {rates_rel['SNc'][a]}, Expected Reward = {expected_reward_over_time[f'{a}{a in target_actions}'][-1]:.2f}, dopamine = {dopamine_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNd'][a*cell_types_numbers['MSNd']:(a+1)*cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNi'][a*cell_types_numbers['MSNi']:(a+1)*cell_types_numbers['MSNi']]]}")               
+                        
+            # Update plots
+            t_array = np.array(t_vec)
             
-            reward_times.append(last_action_selection_time)
-            for action in range(N_actions):
-                if action not in reward_over_time:
-                    reward_over_time[action] = []
-                if  not ((action in target_actions) ^ (action in selected_actions)): #XNOR
-                    reward_over_time[action].append(1)
-                    buttons[f'selected_{action}'].color = 'g'
-                else:
-                    reward_over_time[action].append(0)
-                    buttons[f'selected_{action}'].color = 'r'
+            for i, ch in enumerate(channels_to_plot):
+                # Membrane potential plot
+                for ct in cell_types:
+                    voltages = np.array([np.array(recordings[ct][ch][j]) for j in range(cell_types_numbers[ct])])
+                    avg_voltage = np.mean(voltages, axis=0)
+                    mem_lines[ct][i].set_data(t_array, avg_voltage)
+                    axs[row_potential][col_potential+i].set_xlim(max(0, int(h.t) - plot_interval), max(plot_interval, int(h.t)))
+
+                # Spike raster plot
+                y_base = total_cells
+                for ct in cell_types:
+                    all_spikes = []
+                    for k in range(cell_types_numbers[ct]):
+                        spikes = np.array(spike_times[ct][ch][k].to_python())
+                        y_val = y_base - k
+                        y_vals = np.ones_like(spikes) * y_val
+                        raster_lines[ct][i][k].set_data(spikes, y_vals)
+                        all_spikes.extend(spikes)
+                    # Rate lines
+                    if len(all_spikes) > 0:
+                        bins = np.arange(0, t_array[-1], bin_width_firing_rate)
+                        hist, edges = np.histogram(all_spikes, bins=bins)
+                        if np.any(hist):  # Only proceed if there's at least one spike
+                            rate = hist / (cell_types_numbers[ct] * bin_width_firing_rate / 1000.0)
+                            bin_centers = (edges[:-1] + edges[1:]) / 2
+                            offset = y_base + cell_types_numbers[ct] / 2
+                            spike_rate_max = 100 #1000.0 / stim_intervals[ct] # Hz
+                            rate_scaled = (rate) / (spike_rate_max + 1e-9)
+                            rate_scaled = rate_scaled * (cell_types_numbers[ct] - 1) + y_base - cell_types_numbers[ct] + 1
+                            rate_lines[ct][i].set_data(bin_centers, rate_scaled)
+                        else:
+                            rate_lines[ct][i].set_data([], [])
+                    y_base -= cell_types_numbers[ct]
+                axs[row_spike][col_spike+i].set_xlim(max(0, int(h.t) - plot_interval), max(plot_interval, int(h.t)))
                 
-                input_key = f"{action}{action in target_actions}"
-                
-                if input_key not in expected_reward_over_time:
-                    expected_reward_over_time[input_key] = [expected_reward_value]
-                current_expected_reward = expected_reward_over_time[input_key][-1]
-                expected_reward_over_time[input_key].append(round(current_expected_reward + 0.1 * (reward_over_time[action][-1] - current_expected_reward), 4))
-                updated_expected_reward = expected_reward_over_time[input_key][-1]
-                if action not in DA_over_time:
-                    DA_over_time[action] = []
-                DA_over_time[action].append(round(reward_over_time[action][-1] - updated_expected_reward, 4))
-                if DA_over_time[action][-1] > 0:
-                    SNc_burst(event=None, actions=[action])
-                elif DA_over_time[action][-1] < 0:
-                    SNc_dip(event=None, actions=[action])
-            fig.canvas.draw_idle()
+                # Weight plot
+                for ct in weight_cell_types:
+                    for k in range(cell_types_numbers[ct]):
+                        weight_lines[ct][i][k].set_data(weight_times, weights_over_time[(ct, i, k)])
+                axs[row_weights][col_weights+i].set_xlim(0, max(plot_interval, int(h.t)))
+                all_weights = [w for lst in weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
+                ymin, ymax = min(all_weights), max(all_weights)
+                axs[row_weights][col_weights+i].set_ylim(ymin*0.9, ymax*1.1)
+
+                # Reward plot
+                input_key = f"{i}{i in target_actions}"
+                expected_reward_lines[i][0].set_data(reward_times, expected_reward_over_time[input_key])
+                reward_lines[i][0].set_data(reward_times, reward_over_time[i])
+                dopamine_lines[i][0].set_data(reward_times, dopamine_over_time[i])
+                axs[row_reward][col_reward+i].set_xlim(0, max(plot_interval, int(h.t)))
+
+            #fig.canvas.draw_idle()   
+            #fig.canvas.flush_events() 
             plt.pause(0.001)
-            
-        # Run simulation
-        h.continuerun(h.t + plot_interval)
 
-        # Update plots
-        last_plot_update = int(h.t)
-        t_array = np.array(t_vec)
-        
-        for i, ch in enumerate(channels_to_plot):
-            for ct in cell_types:
-                voltages = np.array([np.array(recordings[ct][ch][j]) for j in range(cell_types_numbers[ct])])
-                avg_voltage = np.mean(voltages, axis=0)
-                mem_lines[ct][i].set_data(t_array, avg_voltage)
-                axs[row_potential][col_potential+i].set_xlim(max(0, last_plot_update - plot_time_range), max(plot_time_range, last_plot_update))
+        state = 1 - state # toggle state
 
-            y_base = total_cells
-            for ct in cell_types:
-                all_spikes = []
-                for k in range(cell_types_numbers[ct]):
-                    spikes = np.array(spike_times[ct][ch][k].to_python())
-                    y_val = y_base - k
-                    y_vals = np.ones_like(spikes) * y_val
-                    raster_lines[ct][i][k].set_data(spikes, y_vals)
-                    all_spikes.extend(spikes)
-
-                if len(all_spikes) > 0:
-                    bins = np.arange(0, t_array[-1], bin_width_firing_rate)
-                    hist, edges = np.histogram(all_spikes, bins=bins)
-                    if np.any(hist):  # Only proceed if there's at least one spike
-                        rate = hist / (cell_types_numbers[ct] * bin_width_firing_rate / 1000.0)
-                        bin_centers = (edges[:-1] + edges[1:]) / 2
-                        offset = y_base + cell_types_numbers[ct] / 2
-                        spike_rate_max = 100 #1000.0 / stim_intervals[ct] # Hz
-                        rate_scaled = (rate) / (spike_rate_max + 1e-9)
-                        rate_scaled = rate_scaled * (cell_types_numbers[ct] - 1) + y_base - cell_types_numbers[ct] + 1
-                        rate_lines[ct][i].set_data(bin_centers, rate_scaled)
-                    else:
-                        rate_lines[ct][i].set_data([], [])
-
-                y_base -= cell_types_numbers[ct]
-            axs[row_spike][col_spike+i].set_xlim(max(0, last_plot_update - plot_time_range), max(plot_time_range, last_plot_update))
-            
-            
-            for ct in weight_cell_types:
-                for k in range(cell_types_numbers[ct]):
-                    weight_lines[ct][i][k].set_data(weight_times, weights_over_time[(ct, i, k)])
-            axs[row_weights][col_weights+i].set_xlim(0, max(plot_time_range, last_plot_update))
-            all_weights = [w for lst in weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
-            ymin, ymax = min(all_weights), max(all_weights)
-            axs[row_weights][col_weights+i].set_ylim(ymin*0.9, ymax*1.1)
-
-        fig.canvas.draw_idle()   
-        fig.canvas.flush_events() 
-        plt.pause(0.001)
+        # Pause simulation
+        if int(h.t) % simulation_stop_time == 0:
+            toggle_pause()
 
 except KeyboardInterrupt:
     print("\nCtrl-C pressed. Storing data...")
@@ -591,7 +625,6 @@ finally:
     scalars = {
         "N_actions": N_actions,
         "plot_interval": plot_interval,
-        "plot_time_range": plot_time_range,
         "bin_width_firing_rate": bin_width_firing_rate,
         "n_spikes_SNc_burst": n_spikes_SNc_burst,
         "selection_threshold": selection_threshold,
@@ -627,7 +660,7 @@ finally:
     data_list = [
         ("ExpectedRewardOverTime", expected_reward_over_time), 
         ("RewardOverTime", reward_over_time), 
-        ("DopamineOverTime", DA_over_time)
+        ("DopamineOverTime", dopamine_over_time)
         ]
     ws_list = []
     for name, data in data_list:
