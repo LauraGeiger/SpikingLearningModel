@@ -21,14 +21,14 @@ cell_types = list(cell_types_numbers.keys())
 
 # Tonic stimulation for all cells
 stim_intervals = {
-    'SNc'       : 1000 / 5,  #  5 Hz
-    'MSNd'      : 1000 / 7.4,  #  5 Hz (tonic baseline)
-    'MSNi'      : 1000 / 3.5,  #  5 Hz (tonic baseline)
-    'GPe'       : 1000 / 48,#12.5,  # 80 Hz
-    'GPi'       : 1000 / 69,#10,    # 100 Hz
-    'Thal'      : 1000 / 14, # 20 Hz
-    'SNc_burst' : 1000 / 50, # 50 Hz
-    'Cor'       : 1000 / 40  # 40 Hz (cortical input stimulation)
+    'SNc'       : 1000 / 5,   # Hz
+    'MSNd'      : 1000 / 7.4, # Hz (tonic baseline)
+    'MSNi'      : 1000 / 3.5, # Hz (tonic baseline)
+    'GPe'       : 1000 / 48,  # Hz
+    'GPi'       : 1000 / 69,  # Hz
+    'Thal'      : 1000 / 14,  # Hz
+    'SNc_burst' : 1000 / 50,  # Hz
+    'Cor'       : 1000 / 40   # Hz (cortical input stimulation)
 }
 
 stim_weights = {
@@ -49,15 +49,15 @@ connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
     ('SNc', 'MSNi', 'SNc_to_MSNi', -85, 0,    10, 1),   # inhibitory
     ('MSNd', 'GPi', 'MSNd_to_GPi', -85, 0.5,  10, 1),   # inhibitory
     ('MSNi', 'GPe', 'MSNi_to_GPe', -85, 0.2,  10, 1),   # inhibitory
-    ('GPe',  'GPi',  'GPe_to_GPi', -85, 0.05, 10, 1),   # inhibitory
-    ('GPi', 'Thal', 'GPi_to_Thal', -85, 0.1,  10, 1)    # inhibitory
+    ('GPe',  'GPi',  'GPe_to_GPi', -85, 0.01, 10, 1),   # inhibitory
+    ('GPi', 'Thal', 'GPi_to_Thal', -85, 0.5,  10, 1)    # inhibitory
 ]
 
 N_actions = 3
 paused = False
 target_actions = []
 noise = 0
-selection_threshold = 0.7
+selection_threshold = 0.8
 n_spikes_SNc_burst = 5
 learning_rate = 0.05
 reward_times = []
@@ -78,8 +78,8 @@ apc_refs = []
 plot_interval = 400  # ms
 channels_to_plot = [i for i in range(N_actions)]
 bin_width_firing_rate = 100  # ms
-cortical_input_start = 1/8 * plot_interval
-cortical_input_stop = 7/8 * plot_interval
+cortical_input_start = 0 * plot_interval + 1
+cortical_input_stop = 1/2 * plot_interval
 simulation_stop_time = 20000 # ms
 
 buttons = {}
@@ -182,6 +182,9 @@ def toggle_target_action(event=None, action=None):
             target_actions.remove(action)
             buttons[f'target_{action}'].label.set_text('Set as\nTarget')
             buttons[f'target_{action}'].color = '0.85'
+
+            h.cvode.event(h.t + 1,  lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
+            h.cvode.event(h.t + 1,  lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
             
         else:
             target_actions.append(action)
@@ -452,7 +455,8 @@ try:
             reward_times.append(int(h.t))
             for action in range(N_actions):
                 # Determine reward
-                if  not ((action in target_actions) ^ (action in selected_actions)): #XNOR
+                #if  not ((action in target_actions) ^ (action in selected_actions)): #XNOR
+                if (action in target_actions) and (action in selected_actions): 
                     reward_over_time[action].append(1)
                 else:
                     reward_over_time[action].append(0)
@@ -468,6 +472,10 @@ try:
 
                 # Update expected reward based on actual reward
                 expected_reward_over_time[input_key].append(round(current_expected_reward + 0.1 * (reward_over_time[action][-1] - current_expected_reward), 4))
+
+                # Repeat latest expected reward value when input is not triggered
+                alternative_input_key = f"{action}{action not in target_actions}"
+                expected_reward_over_time[alternative_input_key].append(expected_reward_over_time[alternative_input_key][-1])
 
         # --- Weight and plot update ---#  
         else: # executed after full time of plot_interval
@@ -495,16 +503,16 @@ try:
                         delta_w = 0
                         if ct == 'MSNd':
                             # dopamine facilitates active MSNd and inhibits less active MSNd
-                            delta_w = learning_rate * (rates_rel[ct][a][k] - 1) * dopamine_over_time[a][-1] # rel_rate = 1 corresponds to tonic baseline activity
+                            delta_w = learning_rate * rates_rel[ct][a][k] * dopamine_over_time[a][-1] # rel_rate = 1 corresponds to tonic baseline activity
                         elif ct == 'MSNi':
                             # high dopamine increases inhibition, low dopamine suppresses inhibition
-                            delta_w = learning_rate * (- dopamine_over_time[a][-1])
+                            delta_w = - learning_rate * dopamine_over_time[a][-1]
                         idx = a * cell_types_numbers[ct] + k
                         new_weight = max(0, weights_over_time[(ct, a, k)][-1] + delta_w) # Update weight ensure weight is non-zero
                         weights_over_time[(ct, a, k)].append(round(new_weight, 4))
                         ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
                         ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
-                if output: print(f"{weight_times[-1]} ms: Action {a}: rel rate MSNd = {rates_rel['MSNd'][a]}, rel rate SNc = {rates_rel['SNc'][a]}, Expected Reward = {expected_reward_over_time[f'{a}{a in target_actions}'][-1]:.2f}, dopamine = {dopamine_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNd'][a*cell_types_numbers['MSNd']:(a+1)*cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNi'][a*cell_types_numbers['MSNi']:(a+1)*cell_types_numbers['MSNi']]]}")               
+                if output: print(f"{weight_times[-1]} ms: Action {a}: rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in rates_rel['MSNd'][a]]}, rel rate SNc = {rates_rel['SNc'][a]:.2f}, Exp. Reward = {expected_reward_over_time[f'{a}{a in target_actions}'][-1]:.2f}, DA = {dopamine_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNd'][a*cell_types_numbers['MSNd']:(a+1)*cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in ncs['Cor_MSNi'][a*cell_types_numbers['MSNi']:(a+1)*cell_types_numbers['MSNi']]]}")               
                         
             # Update plots
             t_array = np.array(t_vec)
