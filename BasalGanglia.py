@@ -59,13 +59,15 @@ N_actions = 3
 paused = False
 target_actions = []
 noise = 0
-selection_threshold = 0.7
+selection_threshold = 0.8
 n_spikes_SNc_burst = 5
 learning_rate = 0.05
 reward_times = []
 activation_times = []
 expected_reward_over_time = {}
 activation_over_time = {}
+target_activation_over_time = {}
+cortical_input_dur_rel = [1] * N_actions
 expected_reward_value = 0.2
 reward_over_time = {}
 dopamine_over_time = {}
@@ -82,7 +84,6 @@ apc_refs = []
 plot_interval = 1000  # ms
 channels_to_plot = [i for i in range(N_actions)]
 bin_width_firing_rate = plot_interval / 10  # ms
-cortical_input_dur = [round(1/2 * plot_interval)] * N_actions
 simulation_stop_time = 20000 # ms
 
 buttons = {}
@@ -186,10 +187,10 @@ def toggle_target_action(event=None, action=None):
             buttons[f'target_{action}'].label.set_text('Set as\nTarget')
             buttons[f'target_{action}'].color = '0.85'
 
-            target_activation_lines[action][0].set_visible(False)
+            #target_activation_lines[action][0].set_visible(False)
 
-            h.cvode.event(h.t + 1,  lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
-            h.cvode.event(h.t + 1,  lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
+            h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
+            h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
             
         else:
             target_actions.append(action)
@@ -207,9 +208,8 @@ def update_stim(val):
             stim.noise = noise
 
 def update_cor_dur(val, action):
-    global cortical_input_dur
-    cortical_input_dur[action] = round(val * 1/2 * plot_interval)
-    target_activation_lines[action][0].set_ydata([val, val])
+    global cortical_input_dur_rel
+    cortical_input_dur_rel[action] = val
 
 #--- Network ------------------------------------------------------------------------------------------------------------------------------------------#
 
@@ -256,8 +256,6 @@ for pre_group, post_group, label, e_rev, weight, tau, delay in connection_specs:
     syns.update({label: []}) # Additional connections dict to store ExpSyns
     for a in range(N_actions):
         for pre_cell in cells[pre_group][a]:
-            #random_post_cell = random.sample(cells[post_group][a], k=round((cell_types_numbers[post_group])/2.0)) # sparse connection: connect pre group randomly to half of post group
-            #for post_cell in random_post_cell:
             for post_cell in cells[post_group][a]:
                 syn = h.ExpSyn(post_cell(0.5))
                 syn.e = e_rev
@@ -312,6 +310,7 @@ for action in range(N_actions):
 activation_times.append(0)
 for action in range(N_actions):
     activation_over_time[action] = [0]
+    target_activation_over_time[action] = [0]
 
 # Recording
 recordings = {ct: [[h.Vector().record(cell(0.5)._ref_v) for cell in cells[ct][a]] for a in range(N_actions)] for ct in cell_types}
@@ -366,7 +365,7 @@ for i, ch in enumerate(channels_to_plot):
             line, = axs[row_spike][col_spike+i].plot([], [], f'C{j}.', markersize=3)
             raster_lines[ct][i].append(line)
 
-        rate_line, = axs[row_spike][col_spike+i].plot([], [], f'C{j}')#, label=f'{ct} rate')
+        rate_line, = axs[row_spike][col_spike+i].step([], [], f'C{j}')#, label=f'{ct} rate')
         rate_lines[ct].append(rate_line)
     axs[row_spike][col_spike+i].plot([], [], color='black', label=f'Relative rate')
 
@@ -400,7 +399,7 @@ for i, ch in enumerate(channels_to_plot):
             weight_lines[ct][i] = []
             for k in range(cell_types_numbers[ct]):
                 label = ct if k == 0 else None  # Only label the first line
-                line, = axs[row_weights][col_weights+i].plot([], [], f'C{j}', label=label)
+                line, = axs[row_weights][col_weights+i].step([], [], f'C{j}', label=label)
                 weight_lines[ct][i].append(line)
 
     #axs[row_weights][col_weights+i].legend(loc='upper right')
@@ -418,10 +417,10 @@ target_activation_lines = [[] for _ in range(N_actions)]
 
 for i, ch in enumerate(channels_to_plot):
     expected_reward_line, = axs[row_reward][col_reward+i].plot([], [], 'C9', label='Expected reward')
-    reward_line, = axs[row_reward][col_reward+i].plot([], [], 'C8', label='Reward')
+    reward_line, = axs[row_reward][col_reward+i].step([], [], 'C8', label='Reward')
     dopamine_line, = axs[row_reward][col_reward+i].plot([], [], 'C6', label='Dopamine')
-    activation_line, = axs[row_reward][col_reward+i].plot([], [], 'C7', linestyle='dotted', label='Activation time')
-    target_activation_line = axs[row_reward][col_reward+i].axhline(y=cortical_input_dur[i] / (1/2 * plot_interval), color='blue', linestyle='dashed', label=f'Target act. time')
+    activation_line, = axs[row_reward][col_reward+i].step([], [], 'C7', linestyle='dashed', label='Activation time')
+    target_activation_line,  = axs[row_reward][col_reward+i].step([], [], color='blue', linestyle='dotted', label=f'Target act. time')
     expected_reward_lines[i].append(expected_reward_line)
     reward_lines[i].append(reward_line)
     dopamine_lines[i].append(dopamine_line)
@@ -454,7 +453,7 @@ for a in range(N_actions):
     buttons[f'target_{a}'] = Button(ax_target, 'Set as\nTarget')
     buttons[f'target_{a}'].on_clicked(lambda event, a=a: toggle_target_action(event=event, action=a))
     ax_cor_dur = axs[row_control_upper][col_potential+a].inset_axes([0.7,0,0.3,0.3])
-    buttons[f'cor_dur_slider{a}'] = Slider(ax_cor_dur, 'Input Dur', 0.2, 1, valinit=cortical_input_dur[a] / (1/2 * plot_interval), valstep=0.2)
+    buttons[f'cor_dur_slider{a}'] = Slider(ax_cor_dur, 'Input Dur', 0.2, 1, valinit=cortical_input_dur_rel[a], valstep=0.2)
     buttons[f'cor_dur_slider{a}'].on_changed(lambda val, a=a: update_cor_dur(val=val, action=a))
 
 
@@ -468,9 +467,9 @@ h.finitialize()
 # Define cortical input stimuli
 for action in target_actions:
     h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=True))  # start cortical input stimulus for that action
-    h.cvode.event(h.t + cortical_input_dur[action],  lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
+    h.cvode.event(h.t + cortical_input_dur_rel[action] * plot_interval/2,  lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
     h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=True))  # start cortical input stimulus for that action
-    h.cvode.event(h.t + cortical_input_dur[action],  lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
+    h.cvode.event(h.t + cortical_input_dur_rel[action] * plot_interval/2,  lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
 
 state = 0  
 try:
@@ -487,8 +486,6 @@ try:
         h.continuerun(h.t + plot_interval // 2)
 
         t_array = np.array(t_vec)
-
-        
 
         # --- Action selection and SNc dip/burst trigger ---#
         if state == 0: # executed after half time of plot_interval
@@ -523,14 +520,16 @@ try:
                             if len(indices) > 0:
                                 for k, g in groupby(enumerate(indices), lambda x: x[0] - x[1]):
                                     group = list(map(itemgetter(1), g))
-                                    start = edges_window[group[0]]
-                                    end = edges_window[group[-1] + 1]
+                                    start = edges_window[group[0]] - bin_width_firing_rate/2
+                                    end = edges_window[group[-1] + 1] + bin_width_firing_rate/2
                                     duration = end - start
+                                    print(f"{i}: start={start}, end={end}, duration={duration}")
                                     if duration > longest_duration:
                                         longest_duration = duration
                                         longest_start = start
                                         longest_end = end
                             activation_over_time[i].append(longest_duration/(plot_interval/2))
+                            target_activation_over_time[i].append(cortical_input_dur_rel[i] if i in target_actions else 0)
                             
             # Select actions
             rates['Thal'], rates_rel['Thal'] = analyse_firing_rate('Thal', window=plot_interval/2)
@@ -572,8 +571,8 @@ try:
             h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=target_actions, active=True))  # start cortical input stimulus for that action
             h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=target_actions, active=True))  # start cortical input stimulus for that action
             for action in target_actions:
-                h.cvode.event(h.t + cortical_input_dur[action], lambda action=action: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
-                h.cvode.event(h.t + cortical_input_dur[action], lambda action=action: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
+                h.cvode.event(h.t + cortical_input_dur_rel[action] * plot_interval/2, lambda action=action: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
+                h.cvode.event(h.t + cortical_input_dur_rel[action] * plot_interval/2, lambda action=action: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
             
             # Analyse firing rates
             rates['SNc'], rates_rel['SNc'] = analyse_firing_rate('SNc', window=plot_interval)
@@ -690,6 +689,7 @@ try:
                 reward_lines[i][0].set_data(reward_times, reward_over_time[i])
                 dopamine_lines[i][0].set_data(reward_times, dopamine_over_time[i])
                 activation_lines[i][0].set_data(activation_times, activation_over_time[i])
+                target_activation_lines[i][0].set_data(activation_times, target_activation_over_time[i])
                 axs[row_reward][col_reward+i].set_xlim(0, max(plot_interval, int(h.t)))
 
             #fig.canvas.draw_idle()   
@@ -741,7 +741,7 @@ finally:
         row += len(lst) + 2
 
     write_list("target_actions", target_actions)
-    write_list("cortical_input_dur", cortical_input_dur)
+    write_list("cortical_input_dur_rel", cortical_input_dur_rel)
 
     # --- Tuples/List of Tuples ---
     def write_tuples(name, tuples_list):
