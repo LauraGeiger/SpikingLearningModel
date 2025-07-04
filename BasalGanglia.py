@@ -15,83 +15,6 @@ from operator import itemgetter
 
 
 h.load_file("stdrun.hoc")
-h.cvode_active(1)
-
-
-#--- Global Variables ------------------------------------------------------------------------------------------------------------------------------------------------#
-'''
-cell_types_numbers = {'SNc': 5, 'MSNd': 5, 'MSNi': 5, 'GPe': 5, 'GPi': 5, 'Thal': 5}
-cell_types = list(cell_types_numbers.keys())
-
-# Tonic stimulation for all cells
-stim_intervals = {
-    'SNc'       : 1000 / 5,   # Hz
-    'MSNd'      : 1000 / 7.4, # Hz (tonic baseline)
-    'MSNi'      : 1000 / 3.5, # Hz (tonic baseline)
-    'GPe'       : 1000 / 48,  # Hz
-    'GPi'       : 1000 / 69,  # Hz
-    'Thal'      : 1000 / 14,  # Hz
-    'SNc_burst' : 1000 / 50,  # Hz
-    'Cor'       : 1000 / 40   # Hz (cortical input stimulation)
-}
-
-stim_weights = {
-    'SNc'       : 2,
-    'MSNd'      : 2,
-    'MSNi'      : 2,
-    'GPe'       : 2,
-    'GPi'       : 2,
-    'Thal'      : 4,
-    'SNc_burst' : 2,
-    'Cor'       : 1.8
-}
-stims, syns, ncs = {}, {}, {}
-
-# Define connection specifications
-connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
-    ('SNc', 'MSNd', 'SNc_to_MSNd',   0, 0,    10, 1),   # excitatory
-    ('SNc', 'MSNi', 'SNc_to_MSNi', -85, 0,    10, 1),   # inhibitory
-    ('MSNd', 'GPi', 'MSNd_to_GPi', -85, 0.4,  10, 1),   # inhibitory
-    ('MSNi', 'GPe', 'MSNi_to_GPe', -85, 0.2,  10, 1),   # inhibitory
-    ('GPe',  'GPi',  'GPe_to_GPi', -85, 0.04, 10, 1),   # inhibitory
-    ('GPi', 'Thal', 'GPi_to_Thal', -85, 0.8,  10, 1)    # inhibitory
-]
-
-N_actions = 3
-paused = False
-target_actions = []
-noise = 0
-selection_threshold = 0.8
-n_spikes_SNc_burst = 5
-learning_rate = 0.05
-reward_times = []
-activation_times = []
-expected_reward_over_time = {}
-activation_over_time = {}
-target_activation_over_time = {}
-cortical_input_dur_rel = [1] * N_actions
-expected_reward_value = 0.2
-reward_over_time = {}
-dopamine_over_time = {}
-weight_cell_types = ['MSNd', 'MSNi']
-weight_times = []
-weights_over_time = {(ct, a, i): [] 
-                     for ct in weight_cell_types
-                     for a in range(N_actions) 
-                     for i in range(cell_types_numbers[ct])
-                     }
-apc_refs = []
-
-
-# Plotting setup
-plot_interval = 1000  # ms
-bin_width_firing_rate = plot_interval / 10  # ms
-simulation_stop_time = 20000 # ms
-
-buttons = {}
-rates = {}
-rates_rel = {}
-'''
 
 output = False # Set to True (print values in the terminal) or False (no printing)
 
@@ -116,15 +39,16 @@ class BasalGanglia:
             'SNc_burst' : 1000 / 50,  # Hz
             'Cor'       : 1000 / 40   # Hz (cortical input stimulation)
         }
+ 
         self.stim_weights = {
-            'SNc'       : 2,
-            'MSNd'      : 2,
-            'MSNi'      : 2,
-            'GPe'       : 2,
-            'GPi'       : 2,
-            'Thal'      : 4,
-            'SNc_burst' : 2,
-            'Cor'       : 1.8
+            'SNc'       : 0.5,
+            'MSNd'      : 0.35,
+            'MSNi'      : 0.35,
+            'GPe'       : 0.5,
+            'GPi'       : 0.5,
+            'Thal'      : 0.5,
+            'SNc_burst' : 0.5,
+            'Cor'       : 0.5
         }
 
         self.stims = {}
@@ -135,10 +59,10 @@ class BasalGanglia:
         self.connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay
             ('SNc', 'MSNd', 'SNc_to_MSNd',   0, 0,    10, 1),   # excitatory
             ('SNc', 'MSNi', 'SNc_to_MSNi', -85, 0,    10, 1),   # inhibitory
-            ('MSNd', 'GPi', 'MSNd_to_GPi', -85, 0.4,  10, 1),   # inhibitory
-            ('MSNi', 'GPe', 'MSNi_to_GPe', -85, 0.2,  10, 1),   # inhibitory
-            ('GPe',  'GPi',  'GPe_to_GPi', -85, 0.04, 10, 1),   # inhibitory
-            ('GPi', 'Thal', 'GPi_to_Thal', -85, 0.8,  10, 1)    # inhibitory
+            ('MSNd', 'GPi', 'MSNd_to_GPi', -85, 0.6,  10, 1),   # inhibitory
+            ('MSNi', 'GPe', 'MSNi_to_GPe', -85, 0.9,  10, 1),   # inhibitory
+            ('GPe',  'GPi',  'GPe_to_GPi', -85, 0.14, 10, 1),   # inhibitory
+            ('GPi', 'Thal', 'GPi_to_Thal', -85, 0.7,  10, 1)    # inhibitory
         ]
 
         self.paused = False
@@ -167,7 +91,7 @@ class BasalGanglia:
 
         self.plot_interval = 1000  # ms
         self.bin_width_firing_rate = self.plot_interval / 10  # ms
-        self.simulation_stop_time = 20000 # ms
+        self.simulation_stop_time = 100000 # ms
 
         self.buttons = {}
         self.rates = {}
@@ -235,8 +159,8 @@ class BasalGanglia:
                         syn.e = e_rev
                         syn.tau = tau
                         nc = h.NetCon(pre_cell(0.5)._ref_v, syn, sec=pre_cell)
-                        nc.weight[0] = random.uniform(0.9*weight, 1.1*weight)
-                        #nc.weight[0] = weight
+                        #nc.weight[0] = random.uniform(0.9*weight, 1.1*weight)
+                        nc.weight[0] = weight
                         nc.delay = delay
                         self.syns[label].append(syn)
                         self.ncs[label].append(nc)
@@ -525,8 +449,6 @@ class BasalGanglia:
                 self.buttons[f'target_{action}'].label.set_text('Set as\nTarget')
                 self.buttons[f'target_{action}'].color = '0.85'
 
-                #target_activation_lines[action][0].set_visible(False)
-
                 h.cvode.event(h.t + 1, lambda: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
                 h.cvode.event(h.t + 1, lambda: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
                 
@@ -568,362 +490,13 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2, noise=0):
     nc.weight[0] = weight
     nc.delay = 1
     return stim, syn, nc
-'''
-def SNc_dip(event=None, actions=None):
-    update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
-    h.cvode.event(h.t + stim_intervals['SNc'], lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
-
-def update_stimulus_activation(cell, stimulus, actions=None, active=True):
-    if actions == None:
-        actions = list(range(N_actions))
-    i = 0
-    for a in range(N_actions):
-        for _ in cells[cell][a]:
-            if a in actions:
-                ncs[stimulus][i].active(active)
-            i += 1
-
-def SNc_burst(event=None, actions=None, n_spikes=None):
-        update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
-        update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=True) # start SNc burst stimulus
-        if n_spikes == None:
-            n_spikes = n_spikes_SNc_burst
-        delay = stim_intervals['SNc_burst'] * n_spikes
-        h.cvode.event(h.t + delay, lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=False))  # stop SNc burst stimulus
-        h.cvode.event(h.t + delay, lambda actions=actions: update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
-
-def analyse_firing_rate(cell, window=None, average=True):
-    """Returns a list of firing rates (Hz) for each action's cell population."""
-    current_time = h.t
-    rates_avg = []
-    rates = []
-    if window == None:
-        window = bin_width_firing_rate
-    for a in range(N_actions):
-        spikes_avg = 0
-        spikes = []
-        for i in range(cell_types_numbers[cell]):
-            spike_vec = spike_times[cell][a][i]
-            # Count spikes in the last `window` ms
-            recent_spikes = [t for t in spike_vec if current_time - window <= t <= current_time]
-            if average:
-                spikes_avg += len(recent_spikes)
-            else:
-                spikes.append(len(recent_spikes))
-        if average:
-            rate_avg = spikes_avg / (cell_types_numbers[cell] * (window / 1000.0))  # spikes/sec per neuron
-            rates_avg.append(rate_avg)
-        else:
-            rate = [spike / (window / 1000.0) for spike in spikes]
-            rates.append(rate)
-
-    max_rate = 1000.0 / stim_intervals[cell]
     
-    if average:
-        rates_rel_avg = [rate_avg / max_rate for rate_avg in rates_avg]
-        return rates_avg, rates_rel_avg
-    else:
-        rates_rel = [[r / max_rate for r in rate] for rate in rates]
-        return rates, rates_rel
-
-def toggle_pause(event=None):
-    global paused
-    paused = not paused
-    buttons['pause'].label.set_text('Continue' if paused else 'Pause')
-    if not paused:
-        buttons['pause'].color = '0.85'
-    else:
-        buttons['pause'].color = 'c'
-    fig.canvas.draw_idle()
-
-def toggle_target_action(event=None, action=None):
-    if action != None:
-        if action in target_actions:
-            target_actions.remove(action)
-            buttons[f'target_{action}'].label.set_text('Set as\nTarget')
-            buttons[f'target_{action}'].color = '0.85'
-
-            #target_activation_lines[action][0].set_visible(False)
-
-            h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
-            h.cvode.event(h.t + 1, lambda: update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
-            
-        else:
-            target_actions.append(action)
-            buttons[f'target_{action}'].label.set_text('Target')
-            buttons[f'target_{action}'].color = 'y'
-
-            target_activation_lines[action][0].set_visible(True)
-        fig.canvas.draw_idle()
-
-def update_stim(val):
-    global noise
-    noise = val
-    for ct in cell_types:
-        for stim in stims[ct]:
-            stim.noise = noise
-
-def update_cor_dur(val, action):
-    global cortical_input_dur_rel
-    cortical_input_dur_rel[action] = val
-'''
-#--- Network ------------------------------------------------------------------------------------------------------------------------------------------#
-'''
-# Create neuron populations
-cells = {
-    cell_type: [
-        [create_cell(f'{cell_type}_{a}_{i}') for i in range(cell_types_numbers[cell_type])]
-        for a in range(N_actions)
-    ] 
-    for cell_type in cell_types
-}
-
-# Spike detectors and vectors
-spike_times = {
-    cell_type: [
-        [h.Vector() for _ in range(cell_types_numbers[cell_type])] 
-        for _ in range(N_actions)
-    ] for cell_type in cell_types
-}
-
-for cell_type in cell_types:
-    for a in range(N_actions):
-        for i, cell in enumerate(cells[cell_type][a]):
-            apc = h.APCount(cell(0.5))
-            apc.record(spike_times[cell_type][a][i])
-            apc_refs.append(apc)
-
-for cell_type in cell_types:
-    stims[cell_type], syns[cell_type], ncs[cell_type] = [], [], []
-    for a in range(N_actions):
-        for i, cell in enumerate(cells[cell_type][a]):
-            if 'SNc' in str(cell):
-                offset = stim_intervals['SNc']/2
-            else:
-                offset = i*stim_intervals[cell_type]/cell_types_numbers[cell_type]
-            stim, syn, nc = create_stim(cell, start=offset, interval=stim_intervals[cell_type], weight=stim_weights[cell_type])
-            stims[cell_type].append(stim)
-            syns[cell_type].append(syn)
-            ncs[cell_type].append(nc)
-
-# Create connections based on the specification
-for pre_group, post_group, label, e_rev, weight, tau, delay in connection_specs:
-    ncs.update({label: []}) # Additional connections dict to store NetCons
-    syns.update({label: []}) # Additional connections dict to store ExpSyns
-    for a in range(N_actions):
-        for pre_cell in cells[pre_group][a]:
-            for post_cell in cells[post_group][a]:
-                syn = h.ExpSyn(post_cell(0.5))
-                syn.e = e_rev
-                syn.tau = tau
-                nc = h.NetCon(pre_cell(0.5)._ref_v, syn, sec=pre_cell)
-                nc.weight[0] = random.uniform(0.9*weight, 1.1*weight)
-                #nc.weight[0] = weight
-                nc.delay = delay
-                syns[label].append(syn)
-                ncs[label].append(nc)
-
-# Additional stimuli for dopamine bursts
-stims.update({'SNc_burst': []})
-syns.update({'SNc_burst': []})
-ncs.update({'SNc_burst': []})
-
-for a in range(N_actions):
-    for cell in cells['SNc'][a]:
-        stim, syn, nc = create_stim(cell, start=0, interval=stim_intervals['SNc_burst'], weight=stim_weights['SNc_burst'])
-        stims['SNc_burst'].append(stim)
-        syns['SNc_burst'].append(syn)
-        ncs['SNc_burst'].append(nc)
-for nc in ncs['SNc_burst']:
-    nc.active(False)
-
-# Additional stimuli for cortical input
-weight_times.append(0)
-for ct in weight_cell_types:
-    stims.update({f'Cor_{ct}': []})
-    syns.update({f'Cor_{ct}': []})
-    ncs.update({f'Cor_{ct}': []})
-    for a in range(N_actions):
-        for k, cell in enumerate(cells[ct][a]):
-            stim, syn, nc = create_stim(cell, start=0, interval=stim_intervals['Cor'], weight=stim_weights['Cor'])
-            stims[f'Cor_{ct}'].append(stim)
-            syns[f'Cor_{ct}'].append(syn)
-            ncs[f'Cor_{ct}'].append(nc)
-            weights_over_time[(ct, a, k)].append(stim_weights['Cor'])
-    for nc in ncs[f'Cor_{ct}']:
-        nc.active(False)
-
-# Reward initialization
-reward_times.append(0)
-for action in range(N_actions):
-    for target in [True, False]:
-        input_key = f"{action}{target}"
-        expected_reward_over_time[input_key] = [expected_reward_value]
-    reward_over_time[action] = [0]
-    dopamine_over_time[action] = [0]
-
-# Activation initialization
-activation_times.append(0)
-for action in range(N_actions):
-    activation_over_time[action] = [0]
-    target_activation_over_time[action] = [0]
-
-# Recording
-recordings = {ct: [[h.Vector().record(cell(0.5)._ref_v) for cell in cells[ct][a]] for a in range(N_actions)] for ct in cell_types}
-t_vec = h.Vector().record(h._ref_t)
-'''
-'''
-#--- Plotting ------------------------------------------------------------------------------------------------------------------------------------------#
-
-plt.ion()
-fig = plt.figure(figsize=(13, 8))
-rows = 5
-gs = gridspec.GridSpec(rows, 1+N_actions, height_ratios=[2]+[4]*(rows-1), width_ratios=[0.3]+[1]*N_actions)
-axs = [[fig.add_subplot(gs[i, j]) for j in range(1+N_actions)] for i in range(rows)]
-[row_control_upper, row_potential, row_spike, row_weights, row_reward] = list(range(rows))
-col_potential = 1
-col_spike = 1
-col_weights = 1
-col_reward = 1
-
-# Deactivate axis for non-plot axes
-for row in range(rows):
-    if row == 0: # first row are control panels
-        for ax in axs[row]:
-            ax.set_axis_off() # deactivate axis
-    else:
-        axs[row][0].set_axis_off() # left column is also control panel
-
-# Membrane potential plot
-axs[row_potential][col_potential].set_ylabel('Membrane potential (mV)')
-mem_lines = {ct: [] for ct in cell_types}
-
-for i, ch in enumerate(range(N_actions)):
-    for j, ct in enumerate(cell_types):
-        avg_line, = axs[row_potential][col_potential+i].plot([], [], f'C{j}', label=ct)
-        mem_lines[ct].append(avg_line)
-
-    axs[row_potential][col_potential+i].set_title(f'Action {ch}')
-    #axs[row_potential][col_potential+i].legend(loc='upper right')
-    axs[row_potential][col_potential+i].set_xlim(0, plot_interval)
-    axs[row_potential][col_potential+i].set_ylim(-85, 65)
-axs[row_potential][-1].legend(loc='upper right')
-
-# Spike raster plot and rate lines
-raster_lines = {ct: [[] for _ in range(N_actions)] for ct in cell_types}
-rate_lines = {ct: [] for ct in cell_types}
-rate_lines.update({'Threshold': []})
-axs[row_spike][col_spike].set_ylabel('Spike raster')
-
-for i, ch in enumerate(range(N_actions)):
-    for j, ct in enumerate(cell_types):
-        raster_lines[ct][i] = []
-        for k in range(cell_types_numbers[ct]):
-            line, = axs[row_spike][col_spike+i].plot([], [], f'C{j}.', markersize=3)
-            raster_lines[ct][i].append(line)
-
-        rate_line, = axs[row_spike][col_spike+i].step([], [], f'C{j}')#, label=f'{ct} rate')
-        rate_lines[ct].append(rate_line)
-    axs[row_spike][col_spike+i].plot([], [], color='black', label=f'Relative rate')
-
-    total_cells = sum(cell_types_numbers[ct] for ct in cell_types)
-    
-    y_base_thal = cell_types_numbers['Thal'] * selection_threshold
-    axs[row_spike][col_spike+i].axhline(y=y_base_thal, color='black', linestyle='dotted', label=f'Activation threshold')
-    
-
-    y_max = total_cells + 1.5
-    axs[row_spike][col_spike+i].set_ylim(0.5, y_max)
-    yticks = []
-    cumulative = 0
-    for ct in cell_types:
-        mid = y_max - (cumulative + (cell_types_numbers[ct]+1) / 2)
-        yticks.append(mid)
-        cumulative += cell_types_numbers[ct] 
-    axs[row_spike][col_spike+i].set_yticks(yticks)
-    axs[row_spike][col_spike+i].set_yticklabels(cell_types)
-    axs[row_spike][col_spike+i].set_xlim(0, plot_interval)
-    #axs[row_spike][col_spike+i].legend(loc='upper right')
-axs[row_spike][-1].legend(loc='upper right')
-
-# Weight plot
-axs[row_weights][col_weights].set_ylabel('Cortical input weight')
-weight_lines = {ct: [[] for _ in range(N_actions)] for ct in weight_cell_types}
-
-for i, ch in enumerate(range(N_actions)):
-    for j, ct in enumerate(cell_types):
-        if ct in weight_cell_types:
-            weight_lines[ct][i] = []
-            for k in range(cell_types_numbers[ct]):
-                label = ct if k == 0 else None  # Only label the first line
-                line, = axs[row_weights][col_weights+i].step([], [], f'C{j}', label=label)
-                weight_lines[ct][i].append(line)
-
-    #axs[row_weights][col_weights+i].legend(loc='upper right')
-    axs[row_weights][col_weights+i].set_xlim(0, plot_interval)
-    axs[row_weights][col_weights+i].set_ylim(0, 3)
-axs[row_weights][-1].legend(loc='upper right')
-
-# Reward plot
-axs[row_reward][col_reward].set_ylabel('Dopamine')
-expected_reward_lines = [[] for _ in range(N_actions)]
-reward_lines = [[] for _ in range(N_actions)]
-dopamine_lines = [[] for _ in range(N_actions)]
-activation_lines = [[] for _ in range(N_actions)]
-target_activation_lines = [[] for _ in range(N_actions)]
-
-for i, ch in enumerate(range(N_actions)):
-    expected_reward_line, = axs[row_reward][col_reward+i].plot([], [], 'C9', label='Expected reward')
-    reward_line, = axs[row_reward][col_reward+i].step([], [], 'C8', label='Reward')
-    dopamine_line, = axs[row_reward][col_reward+i].plot([], [], 'C6', label='Dopamine')
-    activation_line, = axs[row_reward][col_reward+i].step([], [], 'C7', linestyle='dashed', label='Activation time')
-    target_activation_line,  = axs[row_reward][col_reward+i].step([], [], color='blue', linestyle='dotted', label=f'Target act. time')
-    expected_reward_lines[i].append(expected_reward_line)
-    reward_lines[i].append(reward_line)
-    dopamine_lines[i].append(dopamine_line)
-    activation_lines[i].append(activation_line)
-    target_activation_lines[i].append(target_activation_line)
-    
-    #axs[row_reward][col_reward+i].legend(loc='upper right')
-    axs[row_reward][col_reward+i].set_xlabel('Simulation time (ms)')
-    axs[row_reward][col_reward+i].set_xlim(0, plot_interval)
-    axs[row_reward][col_reward+i].set_ylim(-1.1, 1.1)
-axs[row_reward][-1].legend(loc='upper right')
-
-for a in range(N_actions):
-    target_activation_lines[a][0].set_visible(False)
-
-#--- Left control panel ---#
-ax_pause = axs[row_control_upper][0].inset_axes([0,0.5,1,0.5])
-buttons['pause'] = Button(ax_pause, 'Pause')
-buttons['pause'].on_clicked(toggle_pause)
-
-ax_noise = axs[row_control_upper][0].inset_axes([0.5,0,0.5,0.45])
-buttons['noise_slider'] = Slider(ax_noise, 'Noise', 0, 1, valinit=noise, valstep=0.1)
-buttons['noise_slider'].on_changed(update_stim)
-
-
-#--- Upper control panel ---#
-for a in range(N_actions):
-    # Target button
-    ax_target = axs[row_control_upper][col_potential+a].inset_axes([0.0,0,0.3,1])
-    buttons[f'target_{a}'] = Button(ax_target, 'Set as\nTarget')
-    buttons[f'target_{a}'].on_clicked(lambda event, a=a: toggle_target_action(event=event, action=a))
-    ax_cor_dur = axs[row_control_upper][col_potential+a].inset_axes([0.7,0,0.3,0.3])
-    buttons[f'cor_dur_slider{a}'] = Slider(ax_cor_dur, 'Input Dur', 0.2, 1, valinit=cortical_input_dur_rel[a], valstep=0.2)
-    buttons[f'cor_dur_slider{a}'].on_changed(lambda val, a=a: update_cor_dur(val=val, action=a))
-
-
-plt.show()
-plt.tight_layout()
-'''
-    
+  
 # Basal Ganglia
 bg_m = BasalGanglia('MotorLoop')
 
 #--- Simulation ---------------------------------------------------------------------------------------------------------------------------------------------------#
-h.cvode.active(0)  # turn off variable time step
-h.dt = 1#0.1
+h.dt = 1
 h.finitialize()
 
 # Define cortical input stimuli
@@ -962,14 +535,13 @@ try:
                     hist, edges = np.histogram(all_spikes, bins=bins)
                     if np.any(hist):  # Only proceed if there's at least one spike
                         rate = hist / (bg_m.cell_types_numbers[ct] * bg_m.bin_width_firing_rate / 1000.0)
-                        bin_centers = (edges[:-1] + edges[1:]) / 2
+                        bin_ends = edges[1:]
                         
                         if ct == 'Thal':
                             window_start = t_array[-1] - bg_m.plot_interval/2
                             # Get the indices of bins in the last window
-                            bin_indices = np.where(bin_centers > window_start)[0]
+                            bin_indices = np.where(bin_ends > window_start)[0]
                             rate_window = rate[bin_indices]
-                            bin_centers_window = bin_centers[bin_indices]
                             edges_window = edges[bin_indices[0] : bin_indices[-1] + 2]  # include right edge of last bin
 
                             indices = np.where(rate_window > bg_m.selection_threshold * 1000.0 / bg_m.stim_intervals[ct])[0]
@@ -981,10 +553,10 @@ try:
                             if len(indices) > 0:
                                 for k, g in groupby(enumerate(indices), lambda x: x[0] - x[1]):
                                     group = list(map(itemgetter(1), g))
-                                    start = edges_window[group[0]] - bg_m.bin_width_firing_rate/2
-                                    end = edges_window[group[-1] + 1] + bg_m.bin_width_firing_rate/2
+                                    start = edges_window[group[0]] 
+                                    end = edges_window[group[-1] + 1] + bg_m.bin_width_firing_rate
                                     duration = end - start
-                                    print(f"{i}: start={start}, end={end}, duration={duration}")
+                                    #print(f"{i}: start={start}, end={end}, duration={duration}")
                                     if duration > longest_duration:
                                         longest_duration = duration
                                         longest_start = start
@@ -994,7 +566,6 @@ try:
                             
             # Select actions
             bg_m.rates['Thal'], bg_m.rates_rel['Thal'] = bg_m.analyse_firing_rate('Thal', window=bg_m.plot_interval/2)
-            #selected_actions = [i for i, rate_rel in enumerate(rates_rel['Thal']) if rate_rel > selection_threshold]
             selected_actions = [i for i, activations in bg_m.activation_over_time.items() if activations[-1] > 0]
             if output: print(f"{int(h.t)} ms: Target Actions = {bg_m.target_actions}, Selected Actions = {selected_actions}, Rates Thal = {bg_m.rates['Thal']}, Rates Thal relative = {bg_m.rates_rel['Thal']}")
             
@@ -1060,14 +631,10 @@ try:
                         new_weight = max(0, bg_m.weights_over_time[(ct, a, k)][-1] + delta_w) # Update weight ensure weight is non-zero
                         bg_m.weights_over_time[(ct, a, k)].append(round(new_weight, 4))
                         bg_m.ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
-                        bg_m.ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
+                        #bg_m.ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
                 if output: print(f"{bg_m.weight_times[-1]} ms: Action {a}: rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in bg_m.rates_rel['MSNd'][a]]}, rel rate SNc = {bg_m.rates_rel['SNc'][a]:.2f}, Exp. Reward = {bg_m.expected_reward_over_time[f'{a}{a in bg_m.target_actions}'][-1]:.2f}, DA = {bg_m.dopamine_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in bg_m.ncs['Cor_MSNd'][a*bg_m.cell_types_numbers['MSNd']:(a+1)*bg_m.cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in bg_m.ncs['Cor_MSNi'][a*bg_m.cell_types_numbers['MSNi']:(a+1)*bg_m.cell_types_numbers['MSNi']]]}")               
                         
             # Update plots
-            #t_array = np.array(t_vec)
-
-            #activation_times.append(int(h.t))
-
             for i, ch in enumerate(range(bg_m.N_actions)):
                 # Membrane potential plot
                 for ct in bg_m.cell_types:
@@ -1092,8 +659,7 @@ try:
                         hist, edges = np.histogram(all_spikes, bins=bins)
                         if np.any(hist):  # Only proceed if there's at least one spike
                             rate = hist / (bg_m.cell_types_numbers[ct] * bg_m.bin_width_firing_rate / 1000.0)
-                            bin_centers = (edges[:-1] + edges[1:]) / 2
-                            #offset = y_base + cell_types_numbers[ct] / 2
+                            bin_ends = edges[1:]
                             if ct == 'SNc':
                                 spike_rate_max = 1000.0 / bg_m.stim_intervals['SNc_burst'] # Hz
                             elif ct == 'MSNd' or ct == 'MSNi':
@@ -1102,20 +668,18 @@ try:
                                 spike_rate_max = 1000.0 / bg_m.stim_intervals[ct] # Hz
                             rate_scaled = (rate) / (spike_rate_max + 1e-9)
                             rate_scaled = rate_scaled * (bg_m.cell_types_numbers[ct] - 1) + y_base - bg_m.cell_types_numbers[ct] + 1
-                            bg_m.rate_lines[ct][i].set_data(bin_centers, rate_scaled)
+                            bg_m.rate_lines[ct][i].set_data(bin_ends, rate_scaled)
 
                             if ct == 'Thal':
                                 window_start = t_array[-1] - bg_m.plot_interval
                                 # Get the indices of bins in the last window
-                                bin_indices = np.where(bin_centers > window_start)[0]
+                                bin_indices = np.where(bin_ends > window_start)[0]
                                 rate_window = rate[bin_indices]
-                                bin_centers_window = bin_centers[bin_indices]
                                 edges_window = edges[bin_indices[0] : bin_indices[-1] + 2]  # include right edge of last bin
 
                                 indices = np.where(rate_window > bg_m.selection_threshold * spike_rate_max)[0]
                                 
                                 # Group into continuous chunks
-
                                 longest_duration = 0
                                 longest_start = None
                                 longest_end = None
@@ -1129,7 +693,6 @@ try:
                                             longest_duration = duration
                                             longest_start = start
                                             longest_end = end
-                                #activation_over_time[i].append(longest_duration/(plot_interval/2))
                         else:
                             bg_m.rate_lines[ct][i].set_data([], [])
                     y_base -= bg_m.cell_types_numbers[ct]
