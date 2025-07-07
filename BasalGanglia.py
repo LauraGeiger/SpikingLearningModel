@@ -22,9 +22,10 @@ output = False # Set to True (print values in the terminal) or False (no printin
 
 class BasalGanglia:
 
-    def __init__(self, name, N_actions=3):
+    def __init__(self, name, actions):
         self.name = name
-        self.N_actions = N_actions
+        self.actions = actions
+        self.N_actions = len(actions)
 
         self.cell_types_numbers = {'SNc': 5, 'MSNd': 5, 'MSNi': 5, 'GPe': 5, 'GPi': 5, 'Thal': 5}
         self.cell_types = list(self.cell_types_numbers.keys())
@@ -261,7 +262,7 @@ class BasalGanglia:
                 avg_line, = self.axs[self.row_potential][self.col_potential+i].plot([], [], f'C{j}', label=ct)
                 self.mem_lines[ct].append(avg_line)
 
-            self.axs[self.row_potential][self.col_potential+i].set_title(f'Action {ch}')
+            self.axs[self.row_potential][self.col_potential+i].set_title(f'{self.actions[ch]}')
             #axs[row_potential][col_potential+i].legend(loc='upper right')
             self.axs[self.row_potential][self.col_potential+i].set_xlim(0, self.plot_interval)
             self.axs[self.row_potential][self.col_potential+i].set_ylim(-85, 65)
@@ -503,8 +504,6 @@ class BasalGanglia:
                         
                         # Group into continuous chunks
                         longest_duration = 0
-                        #longest_start = None
-                        #longest_end = None
                         if len(indices) > 0:
                             for k, g in groupby(enumerate(indices), lambda x: x[0] - x[1]):
                                 group = list(map(itemgetter(1), g))
@@ -514,8 +513,6 @@ class BasalGanglia:
                                 #print(f"{i}: start={start}, end={end}, duration={duration}")
                                 if duration > longest_duration:
                                     longest_duration = duration
-                                    #longest_start = start
-                                    #longest_end = end
                         self.activation_over_time[i].append(longest_duration/(self.plot_interval/2))
                         self.target_activation_over_time[i].append(self.cortical_input_dur_rel[i] if i in self.target_actions else 0)
   
@@ -525,8 +522,6 @@ class BasalGanglia:
         if output: print(f"{int(current_time)} ms: Target Actions = {self.target_actions}, Selected Actions = {self.selected_actions}, Rates Thal = {self.rates['Thal']}, Rates Thal relative = {self.rates_rel['Thal']}")
         
     def determine_reward(self, current_time):
-        #correct_actions = list(set(self.target_actions) & set(self.selected_actions))
-        #incorrect_actions = list(set(self.target_actions) ^ set(self.selected_actions))
         self.reward_times.append(int(current_time))
         for action in range(self.N_actions):
             # Determine reward
@@ -799,9 +794,11 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2, noise=0):
 
 
 
-# Basal Ganglia
-#bg_p = BasalGanglia('PrefrontalLoop')
-bg_m = BasalGanglia('MotorLoop')
+# Basal Ganglia Loops
+actions = ["Precision pinch", "Power grasp"]
+bg_p = BasalGanglia('PrefrontalLoop', actions)
+actions = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
+bg_m = BasalGanglia('MotorLoop', actions)
 
 #--- Simulation ---------------------------------------------------------------------------------------------------------------------------------------------------#
 h.dt = 1
