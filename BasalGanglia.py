@@ -399,7 +399,7 @@ class BasalGanglia:
         h.cvode.event(h.t + delay, lambda actions=actions: self.update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=False))  # stop SNc burst stimulus
         h.cvode.event(h.t + delay, lambda actions=actions: self.update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
 
-    def analyse_firing_rate(self, cell, window=None, average=True):
+    def analyze_firing_rate(self, cell, window=None, average=True):
         """Returns a list of firing rates (Hz) for each action's cell population."""
         current_time = h.t
         rates_avg = []
@@ -470,6 +470,312 @@ class BasalGanglia:
         self.cortical_input_dur_rel
         self.cortical_input_dur_rel[action] = val
 
+    def cortical_input_stimuli(self, current_time):
+        h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=self.target_actions, active=True))  # start cortical input stimulus for that action
+        h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=self.target_actions, active=True))  # start cortical input stimulus for that action
+        for action in self.target_actions:
+            h.cvode.event(current_time + self.cortical_input_dur_rel[action] * self.plot_interval/2, lambda action=action: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
+            h.cvode.event(current_time + self.cortical_input_dur_rel[action] * self.plot_interval/2, lambda action=action: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
+            
+    def analyze_thalamus_activation_time(self, current_time):
+        self.activation_times.append(int(current_time))
+
+        for i, ch in enumerate(range(self.N_actions)):
+            for ct in self.cell_types:
+                all_spikes = []
+                for k in range(self.cell_types_numbers[ct]):
+                    spikes = np.array(self.spike_times[ct][ch][k].to_python())
+                    all_spikes.extend(spikes)
+                bins = np.arange(0, np.array(self.t_vec)[-1], self.bin_width_firing_rate)
+                hist, edges = np.histogram(all_spikes, bins=bins)
+                if np.any(hist):  # Only proceed if there's at least one spike
+                    rate = hist / (self.cell_types_numbers[ct] * self.bin_width_firing_rate / 1000.0)
+                    bin_ends = edges[1:]
+                    
+                    if ct == 'Thal':
+                        window_start = np.array(self.t_vec)[-1] - self.plot_interval/2
+                        # Get the indices of bins in the last window
+                        bin_indices = np.where(bin_ends > window_start)[0]
+                        rate_window = rate[bin_indices]
+                        edges_window = edges[bin_indices[0] : bin_indices[-1] + 2]  # include right edge of last bin
+
+                        indices = np.where(rate_window > self.selection_threshold * 1000.0 / self.stim_intervals[ct])[0]
+                        
+                        # Group into continuous chunks
+                        longest_duration = 0
+                        #longest_start = None
+                        #longest_end = None
+                        if len(indices) > 0:
+                            for k, g in groupby(enumerate(indices), lambda x: x[0] - x[1]):
+                                group = list(map(itemgetter(1), g))
+                                start = edges_window[group[0]] 
+                                end = edges_window[group[-1] + 1] + self.bin_width_firing_rate
+                                duration = end - start
+                                #print(f"{i}: start={start}, end={end}, duration={duration}")
+                                if duration > longest_duration:
+                                    longest_duration = duration
+                                    #longest_start = start
+                                    #longest_end = end
+                        self.activation_over_time[i].append(longest_duration/(self.plot_interval/2))
+                        self.target_activation_over_time[i].append(self.cortical_input_dur_rel[i] if i in self.target_actions else 0)
+  
+    def select_actions(self, current_time):
+        self.rates['Thal'], self.rates_rel['Thal'] = self.analyze_firing_rate('Thal', window=self.plot_interval/2)
+        self.selected_actions = [i for i, activations in self.activation_over_time.items() if activations[-1] > 0]
+        if output: print(f"{int(current_time)} ms: Target Actions = {self.target_actions}, Selected Actions = {self.selected_actions}, Rates Thal = {self.rates['Thal']}, Rates Thal relative = {self.rates_rel['Thal']}")
+        
+    def determine_reward(self, current_time):
+        #correct_actions = list(set(self.target_actions) & set(self.selected_actions))
+        #incorrect_actions = list(set(self.target_actions) ^ set(self.selected_actions))
+        self.reward_times.append(int(current_time))
+        for action in range(self.N_actions):
+            # Determine reward
+            #if  not ((action in target_actions) ^ (action in selected_actions)): #XNOR
+            if (action in self.target_actions) and (action in self.selected_actions): 
+                self.reward_over_time[action].append(1)
+            else:
+                self.reward_over_time[action].append(0)
+
+            # Trigger SNc dips or bursts based on difference between actual reward and expected reward
+            input_key = f"{action}{action in self.target_actions}"
+            current_expected_reward = self.expected_reward_over_time[input_key][-1]
+            self.dopamine_over_time[action].append(round(self.reward_over_time[action][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
+            if self.reward_over_time[action][-1] - current_expected_reward > 0:
+                self.SNc_burst(event=None, actions=[action])
+            elif self.reward_over_time[action][-1] - current_expected_reward < 0:
+                self.SNc_dip(event=None, actions=[action])
+
+            # Update expected reward based on actual reward
+            self.expected_reward_over_time[input_key].append(round(current_expected_reward + 0.1 * (self.reward_over_time[action][-1] - current_expected_reward), 4))
+
+            # Repeat latest expected reward value when input is not triggered
+            alternative_input_key = f"{action}{action not in self.target_actions}"
+            self.expected_reward_over_time[alternative_input_key].append(self.expected_reward_over_time[alternative_input_key][-1])
+
+    def update_weights(self, current_time):
+        # Analyze firing rates
+        self.rates['SNc'], self.rates_rel['SNc'] = self.analyze_firing_rate('SNc', window=self.plot_interval)
+        self.rates['MSNd'], self.rates_rel['MSNd'] = self.analyze_firing_rate('MSNd', window=self.plot_interval, average=False)
+        self.rates['MSNi'], self.rates_rel['MSNi'] = self.analyze_firing_rate('MSNi', window=self.plot_interval, average=False)
+
+        # TODO: set dopamine value based on relative SNc rate (lenth of dip and burst to be adapted)
+        #print(f"dopamine over time: {dopamine_over_time}")
+        #print(f"rel SNc rate: {rates_rel['SNc']}")
+
+        # Update weights
+        self.weight_times.append(int(current_time))
+        for a in range(self.N_actions):
+            for ct in self.weight_cell_types:
+                for k in range(self.cell_types_numbers[ct]):
+                    delta_w = 0
+                    if ct == 'MSNd':
+                        # dopamine facilitates active MSNd and inhibits less active MSNd
+                        delta_w = self.learning_rate * self.rates_rel[ct][a][k] * self.dopamine_over_time[a][-1] # rel_rate = 1 corresponds to tonic baseline activity
+                    elif ct == 'MSNi':
+                        # high dopamine increases inhibition, low dopamine suppresses inhibition
+                        delta_w = - self.learning_rate * self.dopamine_over_time[a][-1]
+                    idx = a * self.cell_types_numbers[ct] + k
+                    new_weight = max(0, self.weights_over_time[(ct, a, k)][-1] + delta_w) # Update weight ensure weight is non-zero
+                    self.weights_over_time[(ct, a, k)].append(round(new_weight, 4))
+                    self.ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
+                    #self.ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
+            if output: print(f"{self.weight_times[-1]} ms: Action {a}: rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in self.rates_rel['MSNd'][a]]}, rel rate SNc = {self.rates_rel['SNc'][a]:.2f}, Exp. Reward = {self.expected_reward_over_time[f'{a}{a in self.target_actions}'][-1]:.2f}, DA = {self.dopamine_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNd'][a*self.cell_types_numbers['MSNd']:(a+1)*self.cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNi'][a*self.cell_types_numbers['MSNi']:(a+1)*self.cell_types_numbers['MSNi']]]}")               
+                 
+    def update_plots(self, current_time):
+        # Update plots
+        for i, ch in enumerate(range(self.N_actions)):
+            # Membrane potential plot
+            for ct in self.cell_types:
+                voltages = np.array([np.array(self.recordings[ct][ch][j]) for j in range(self.cell_types_numbers[ct])])
+                avg_voltage = np.mean(voltages, axis=0)
+                self.mem_lines[ct][i].set_data(np.array(self.t_vec), avg_voltage)
+                self.axs[self.row_potential][self.col_potential+i].set_xlim(max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
+
+            # Spike raster plot
+            y_base = self.total_cells
+            for ct in self.cell_types:
+                all_spikes = []
+                for k in range(self.cell_types_numbers[ct]):
+                    spikes = np.array(self.spike_times[ct][ch][k].to_python())
+                    y_val = y_base - k
+                    y_vals = np.ones_like(spikes) * y_val
+                    self.raster_lines[ct][i][k].set_data(spikes, y_vals)
+                    all_spikes.extend(spikes)
+                # Rate lines
+                if len(all_spikes) > 0:
+                    bins = np.arange(0, np.array(self.t_vec)[-1], self.bin_width_firing_rate)
+                    hist, edges = np.histogram(all_spikes, bins=bins)
+                    if np.any(hist):  # Only proceed if there's at least one spike
+                        rate = hist / (self.cell_types_numbers[ct] * self.bin_width_firing_rate / 1000.0)
+                        bin_ends = edges[1:]
+                        if ct == 'SNc':
+                            spike_rate_max = 1000.0 / self.stim_intervals['SNc_burst'] # Hz
+                        elif ct == 'MSNd' or ct == 'MSNi':
+                            spike_rate_max = 1000.0 / self.stim_intervals['Cor'] # Hz
+                        else:
+                            spike_rate_max = 1000.0 / self.stim_intervals[ct] # Hz
+                        rate_scaled = (rate) / (spike_rate_max + 1e-9)
+                        rate_scaled = rate_scaled * (self.cell_types_numbers[ct] - 1) + y_base - self.cell_types_numbers[ct] + 1
+                        self.rate_lines[ct][i].set_data(bin_ends, rate_scaled)
+
+                        if ct == 'Thal':
+                            window_start = np.array(self.t_vec)[-1] - self.plot_interval
+                            # Get the indices of bins in the last window
+                            bin_indices = np.where(bin_ends > window_start)[0]
+                            rate_window = rate[bin_indices]
+                            edges_window = edges[bin_indices[0] : bin_indices[-1] + 2]  # include right edge of last bin
+
+                            indices = np.where(rate_window > self.selection_threshold * spike_rate_max)[0]
+                            
+                            # Group into continuous chunks
+                            longest_duration = 0
+                            longest_start = None
+                            longest_end = None
+                            if len(indices) > 0:
+                                for k, g in groupby(enumerate(indices), lambda x: x[0] - x[1]):
+                                    group = list(map(itemgetter(1), g))
+                                    start = edges_window[group[0]]
+                                    end = edges_window[group[-1] + 1]
+                                    duration = end - start
+                                    if duration > longest_duration:
+                                        longest_duration = duration
+                                        longest_start = start
+                                        longest_end = end
+                    else:
+                        self.rate_lines[ct][i].set_data([], [])
+                y_base -= self.cell_types_numbers[ct]
+            self.axs[self.row_spike][self.col_spike+i].set_xlim(max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
+            
+            # Weight plot
+            for ct in self.weight_cell_types:
+                for k in range(self.cell_types_numbers[ct]):
+                    self.weight_lines[ct][i][k].set_data(self.weight_times, self.weights_over_time[(ct, i, k)])
+            self.axs[self.row_weights][self.col_weights+i].set_xlim(0, max(self.plot_interval, int(current_time)))
+            all_weights = [w for lst in self.weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
+            ymin, ymax = min(all_weights), max(all_weights)
+            self.axs[self.row_weights][self.col_weights+i].set_ylim(ymin*0.9, ymax*1.1)
+
+            # Reward plot
+            input_key = f"{i}{i in self.target_actions}"
+            self.expected_reward_lines[i][0].set_data(self.reward_times, self.expected_reward_over_time[input_key])
+            self.reward_lines[i][0].set_data(self.reward_times, self.reward_over_time[i])
+            self.dopamine_lines[i][0].set_data(self.reward_times, self.dopamine_over_time[i])
+            self.activation_lines[i][0].set_data(self.activation_times, self.activation_over_time[i])
+            self.target_activation_lines[i][0].set_data(self.activation_times, self.target_activation_over_time[i])
+            self.axs[self.row_reward][self.col_reward+i].set_xlim(0, max(self.plot_interval, int(current_time)))
+    
+    def save_data(self, path):
+        # Workbook
+        wb = Workbook()
+        path_extented = f"{path}_{self.name}"
+
+        # Worksheet for General Details
+        ws_globals = wb.active
+        ws_globals.title = "GlobalVariables"
+
+        row = 1
+
+        # --- Dictionaries ---
+        def write_dict(name, data, row):
+            ws_globals.cell(row=row, column=1, value=name)
+            row += 1
+            for k, v in data.items():
+                ws_globals.cell(row=row, column=1, value=str(k))
+                ws_globals.cell(row=row, column=2, value=v)
+                row += 1
+            row += 1
+            return row
+
+        row = write_dict("cell_types_numbers", self.cell_types_numbers, row)
+        row = write_dict("stim_intervals", self.stim_intervals, row)
+        row = write_dict("stim_weights", self.stim_weights, row)
+
+        # --- Lists ---
+        def write_list(name, lst, row):
+            ws_globals.cell(row=row, column=1, value=name)
+            for i, val in enumerate(lst):
+                ws_globals.cell(row=row + 1 + i, column=1, value=val)
+            row += len(lst) + 2
+            return row
+
+        row = write_list("target_actions", self.target_actions, row)
+        row = write_list("cortical_input_dur_rel", self.cortical_input_dur_rel, row)
+
+        # --- Tuples/List of Tuples ---
+        def write_tuples(name, tuples_list, row):
+            ws_globals.cell(row=row, column=1, value=name)
+            for i, tup in enumerate(tuples_list):
+                for j, val in enumerate(tup):
+                    ws_globals.cell(row=row + 1 + i, column=1 + j, value=val)
+            row += len(tuples_list) + 2
+            return row
+
+        row = write_tuples("connection_specs", self.connection_specs, row)
+
+        # --- Scalars ---
+        scalars = {
+            "N_actions": self.N_actions,
+            "plot_interval": self.plot_interval,
+            "bin_width_firing_rate": self.bin_width_firing_rate,
+            "n_spikes_SNc_burst": self.n_spikes_SNc_burst,
+            "selection_threshold": self.selection_threshold,
+            "learning_rate": self.learning_rate,
+            "expected_reward_value": self.expected_reward_value,
+            "noise": self.noise,
+            "simulation_stop_time": self.simulation_stop_time
+
+        }
+        row = write_dict("Scalars", scalars, row)
+
+        # Worksheet for Weights
+        ws_weights = wb.create_sheet(title="WeightsOverTime")
+
+        # Header
+        header = ['time']
+        keys = sorted(self.weights_over_time.keys())
+        header.extend(f"{ct}_a{a}_n{i}" for ct, a, i in keys)
+        ws_weights.append(header)
+
+        # Weights
+        max_len = len(self.weight_times)
+        for t_idx in range(max_len):
+            row = [self.weight_times[t_idx]]
+            for key in keys:
+                val = self.weights_over_time[key][t_idx] if t_idx < len(self.weights_over_time[key]) else None
+                row.append(val)
+            ws_weights.append(row)
+
+        # Worksheets
+        data_list = [
+            ("ExpectedRewardOverTime", self.expected_reward_over_time), 
+            ("RewardOverTime", self.reward_over_time), 
+            ("DopamineOverTime", self.dopamine_over_time)
+            ]
+        ws_list = []
+        for name, data in data_list:
+            ws = wb.create_sheet(title=f"{name}")
+            
+            # Header
+            header = ['time']
+            keys = sorted(data.keys())
+            header.extend(f"{key}" for key in keys)
+            ws.append(header)
+
+            # Rows
+            max_len = len(self.reward_times)
+            for t_idx in range(max_len):
+                row = [self.reward_times[t_idx]]
+                for key in keys:
+                    val = data[key][t_idx] if t_idx < len(data[key]) else None
+                    row.append(val)
+                ws.append(row)
+
+            ws_list.append(ws)
+
+        # Save
+        wb.save(f"{path_extented}.xlsx") # Excel
+        print(path_extented)
+
 #--- Functions ------------------------------------------------------------------------------------------------------------------------------------------------#
 
 def create_cell(name):
@@ -490,9 +796,11 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2, noise=0):
     nc.weight[0] = weight
     nc.delay = 1
     return stim, syn, nc
-    
-  
+
+
+
 # Basal Ganglia
+#bg_p = BasalGanglia('PrefrontalLoop')
 bg_m = BasalGanglia('MotorLoop')
 
 #--- Simulation ---------------------------------------------------------------------------------------------------------------------------------------------------#
@@ -500,11 +808,7 @@ h.dt = 1
 h.finitialize()
 
 # Define cortical input stimuli
-for action in bg_m.target_actions:
-    h.cvode.event(h.t + 1, lambda: bg_m.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=True))  # start cortical input stimulus for that action
-    h.cvode.event(h.t + bg_m.cortical_input_dur_rel[action] * bg_m.plot_interval/2,  lambda: bg_m.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
-    h.cvode.event(h.t + 1, lambda: bg_m.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=True))  # start cortical input stimulus for that action
-    h.cvode.event(h.t + bg_m.cortical_input_dur_rel[action] * bg_m.plot_interval/2,  lambda: bg_m.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
+bg_m.cortical_input_stimuli(current_time=h.t)
 
 state = 0  
 try:
@@ -519,202 +823,18 @@ try:
 
         # Run simulation for half of the interval
         h.continuerun(h.t + bg_m.plot_interval // 2)
-        t_array = np.array(bg_m.t_vec)
 
-        # --- Action selection and SNc dip/burst trigger ---#
+        # --- Action selection and reward update ---#
         if state == 0: # executed after half time of plot_interval
-            bg_m.activation_times.append(int(h.t))
-
-            for i, ch in enumerate(range(bg_m.N_actions)):
-                for ct in bg_m.cell_types:
-                    all_spikes = []
-                    for k in range(bg_m.cell_types_numbers[ct]):
-                        spikes = np.array(bg_m.spike_times[ct][ch][k].to_python())
-                        all_spikes.extend(spikes)
-                    bins = np.arange(0, t_array[-1], bg_m.bin_width_firing_rate)
-                    hist, edges = np.histogram(all_spikes, bins=bins)
-                    if np.any(hist):  # Only proceed if there's at least one spike
-                        rate = hist / (bg_m.cell_types_numbers[ct] * bg_m.bin_width_firing_rate / 1000.0)
-                        bin_ends = edges[1:]
-                        
-                        if ct == 'Thal':
-                            window_start = t_array[-1] - bg_m.plot_interval/2
-                            # Get the indices of bins in the last window
-                            bin_indices = np.where(bin_ends > window_start)[0]
-                            rate_window = rate[bin_indices]
-                            edges_window = edges[bin_indices[0] : bin_indices[-1] + 2]  # include right edge of last bin
-
-                            indices = np.where(rate_window > bg_m.selection_threshold * 1000.0 / bg_m.stim_intervals[ct])[0]
-                            
-                            # Group into continuous chunks
-                            longest_duration = 0
-                            longest_start = None
-                            longest_end = None
-                            if len(indices) > 0:
-                                for k, g in groupby(enumerate(indices), lambda x: x[0] - x[1]):
-                                    group = list(map(itemgetter(1), g))
-                                    start = edges_window[group[0]] 
-                                    end = edges_window[group[-1] + 1] + bg_m.bin_width_firing_rate
-                                    duration = end - start
-                                    #print(f"{i}: start={start}, end={end}, duration={duration}")
-                                    if duration > longest_duration:
-                                        longest_duration = duration
-                                        longest_start = start
-                                        longest_end = end
-                            bg_m.activation_over_time[i].append(longest_duration/(bg_m.plot_interval/2))
-                            bg_m.target_activation_over_time[i].append(bg_m.cortical_input_dur_rel[i] if i in bg_m.target_actions else 0)
-                            
-            # Select actions
-            bg_m.rates['Thal'], bg_m.rates_rel['Thal'] = bg_m.analyse_firing_rate('Thal', window=bg_m.plot_interval/2)
-            selected_actions = [i for i, activations in bg_m.activation_over_time.items() if activations[-1] > 0]
-            if output: print(f"{int(h.t)} ms: Target Actions = {bg_m.target_actions}, Selected Actions = {selected_actions}, Rates Thal = {bg_m.rates['Thal']}, Rates Thal relative = {bg_m.rates_rel['Thal']}")
-            
-            correct_actions = list(set(bg_m.target_actions) & set(selected_actions))
-            incorrect_actions = list(set(bg_m.target_actions) ^ set(selected_actions))
-            bg_m.reward_times.append(int(h.t))
-            for action in range(bg_m.N_actions):
-                # Determine reward
-                #if  not ((action in target_actions) ^ (action in selected_actions)): #XNOR
-                if (action in bg_m.target_actions) and (action in selected_actions): 
-                    bg_m.reward_over_time[action].append(1)
-                else:
-                    bg_m.reward_over_time[action].append(0)
-
-                # Trigger SNc dips or bursts based on difference between actual reward and expected reward
-                input_key = f"{action}{action in bg_m.target_actions}"
-                current_expected_reward = bg_m.expected_reward_over_time[input_key][-1]
-                bg_m.dopamine_over_time[action].append(round(bg_m.reward_over_time[action][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
-                if bg_m.reward_over_time[action][-1] - current_expected_reward > 0:
-                    bg_m.SNc_burst(event=None, actions=[action])
-                elif bg_m.reward_over_time[action][-1] - current_expected_reward < 0:
-                    bg_m.SNc_dip(event=None, actions=[action])
-
-                # Update expected reward based on actual reward
-                bg_m.expected_reward_over_time[input_key].append(round(current_expected_reward + 0.1 * (bg_m.reward_over_time[action][-1] - current_expected_reward), 4))
-
-                # Repeat latest expected reward value when input is not triggered
-                alternative_input_key = f"{action}{action not in bg_m.target_actions}"
-                bg_m.expected_reward_over_time[alternative_input_key].append(bg_m.expected_reward_over_time[alternative_input_key][-1])
+            bg_m.analyze_thalamus_activation_time(current_time=h.t)
+            bg_m.select_actions(current_time=h.t)
+            bg_m.determine_reward(current_time=h.t)
 
         # --- Weight and plot update ---#  
         else: # executed after full time of plot_interval
-
-            # Define cortical input stimuli
-            h.cvode.event(h.t + 1, lambda: bg_m.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=bg_m.target_actions, active=True))  # start cortical input stimulus for that action
-            h.cvode.event(h.t + 1, lambda: bg_m.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=bg_m.target_actions, active=True))  # start cortical input stimulus for that action
-            for action in bg_m.target_actions:
-                h.cvode.event(h.t + bg_m.cortical_input_dur_rel[action] * bg_m.plot_interval/2, lambda action=action: bg_m.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
-                h.cvode.event(h.t + bg_m.cortical_input_dur_rel[action] * bg_m.plot_interval/2, lambda action=action: bg_m.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
-            
-            # Analyse firing rates
-            bg_m.rates['SNc'], bg_m.rates_rel['SNc'] = bg_m.analyse_firing_rate('SNc', window=bg_m.plot_interval)
-            bg_m.rates['MSNd'], bg_m.rates_rel['MSNd'] = bg_m.analyse_firing_rate('MSNd', window=bg_m.plot_interval, average=False)
-            bg_m.rates['MSNi'], bg_m.rates_rel['MSNi'] = bg_m.analyse_firing_rate('MSNi', window=bg_m.plot_interval, average=False)
-
-            # TODO: set dopamine value based on relative SNc rate (lenth of dip and burst to be adapted)
-            #print(f"dopamine over time: {dopamine_over_time}")
-            #print(f"rel SNc rate: {rates_rel['SNc']}")
-
-            # Update weights
-            bg_m.weight_times.append(int(h.t))
-            for a in range(bg_m.N_actions):
-                for ct in bg_m.weight_cell_types:
-                    for k in range(bg_m.cell_types_numbers[ct]):
-                        delta_w = 0
-                        if ct == 'MSNd':
-                            # dopamine facilitates active MSNd and inhibits less active MSNd
-                            delta_w = bg_m.learning_rate * bg_m.rates_rel[ct][a][k] * bg_m.dopamine_over_time[a][-1] # rel_rate = 1 corresponds to tonic baseline activity
-                        elif ct == 'MSNi':
-                            # high dopamine increases inhibition, low dopamine suppresses inhibition
-                            delta_w = - bg_m.learning_rate * bg_m.dopamine_over_time[a][-1]
-                        idx = a * bg_m.cell_types_numbers[ct] + k
-                        new_weight = max(0, bg_m.weights_over_time[(ct, a, k)][-1] + delta_w) # Update weight ensure weight is non-zero
-                        bg_m.weights_over_time[(ct, a, k)].append(round(new_weight, 4))
-                        bg_m.ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
-                        #bg_m.ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
-                if output: print(f"{bg_m.weight_times[-1]} ms: Action {a}: rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in bg_m.rates_rel['MSNd'][a]]}, rel rate SNc = {bg_m.rates_rel['SNc'][a]:.2f}, Exp. Reward = {bg_m.expected_reward_over_time[f'{a}{a in bg_m.target_actions}'][-1]:.2f}, DA = {bg_m.dopamine_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in bg_m.ncs['Cor_MSNd'][a*bg_m.cell_types_numbers['MSNd']:(a+1)*bg_m.cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in bg_m.ncs['Cor_MSNi'][a*bg_m.cell_types_numbers['MSNi']:(a+1)*bg_m.cell_types_numbers['MSNi']]]}")               
-                        
-            # Update plots
-            for i, ch in enumerate(range(bg_m.N_actions)):
-                # Membrane potential plot
-                for ct in bg_m.cell_types:
-                    voltages = np.array([np.array(bg_m.recordings[ct][ch][j]) for j in range(bg_m.cell_types_numbers[ct])])
-                    avg_voltage = np.mean(voltages, axis=0)
-                    bg_m.mem_lines[ct][i].set_data(t_array, avg_voltage)
-                    bg_m.axs[bg_m.row_potential][bg_m.col_potential+i].set_xlim(max(0, int(h.t) - bg_m.plot_interval), max(bg_m.plot_interval, int(h.t)))
-
-                # Spike raster plot
-                y_base = bg_m.total_cells
-                for ct in bg_m.cell_types:
-                    all_spikes = []
-                    for k in range(bg_m.cell_types_numbers[ct]):
-                        spikes = np.array(bg_m.spike_times[ct][ch][k].to_python())
-                        y_val = y_base - k
-                        y_vals = np.ones_like(spikes) * y_val
-                        bg_m.raster_lines[ct][i][k].set_data(spikes, y_vals)
-                        all_spikes.extend(spikes)
-                    # Rate lines
-                    if len(all_spikes) > 0:
-                        bins = np.arange(0, t_array[-1], bg_m.bin_width_firing_rate)
-                        hist, edges = np.histogram(all_spikes, bins=bins)
-                        if np.any(hist):  # Only proceed if there's at least one spike
-                            rate = hist / (bg_m.cell_types_numbers[ct] * bg_m.bin_width_firing_rate / 1000.0)
-                            bin_ends = edges[1:]
-                            if ct == 'SNc':
-                                spike_rate_max = 1000.0 / bg_m.stim_intervals['SNc_burst'] # Hz
-                            elif ct == 'MSNd' or ct == 'MSNi':
-                                spike_rate_max = 1000.0 / bg_m.stim_intervals['Cor'] # Hz
-                            else:
-                                spike_rate_max = 1000.0 / bg_m.stim_intervals[ct] # Hz
-                            rate_scaled = (rate) / (spike_rate_max + 1e-9)
-                            rate_scaled = rate_scaled * (bg_m.cell_types_numbers[ct] - 1) + y_base - bg_m.cell_types_numbers[ct] + 1
-                            bg_m.rate_lines[ct][i].set_data(bin_ends, rate_scaled)
-
-                            if ct == 'Thal':
-                                window_start = t_array[-1] - bg_m.plot_interval
-                                # Get the indices of bins in the last window
-                                bin_indices = np.where(bin_ends > window_start)[0]
-                                rate_window = rate[bin_indices]
-                                edges_window = edges[bin_indices[0] : bin_indices[-1] + 2]  # include right edge of last bin
-
-                                indices = np.where(rate_window > bg_m.selection_threshold * spike_rate_max)[0]
-                                
-                                # Group into continuous chunks
-                                longest_duration = 0
-                                longest_start = None
-                                longest_end = None
-                                if len(indices) > 0:
-                                    for k, g in groupby(enumerate(indices), lambda x: x[0] - x[1]):
-                                        group = list(map(itemgetter(1), g))
-                                        start = edges_window[group[0]]
-                                        end = edges_window[group[-1] + 1]
-                                        duration = end - start
-                                        if duration > longest_duration:
-                                            longest_duration = duration
-                                            longest_start = start
-                                            longest_end = end
-                        else:
-                            bg_m.rate_lines[ct][i].set_data([], [])
-                    y_base -= bg_m.cell_types_numbers[ct]
-                bg_m.axs[bg_m.row_spike][bg_m.col_spike+i].set_xlim(max(0, int(h.t) - bg_m.plot_interval), max(bg_m.plot_interval, int(h.t)))
-                
-                # Weight plot
-                for ct in bg_m.weight_cell_types:
-                    for k in range(bg_m.cell_types_numbers[ct]):
-                        bg_m.weight_lines[ct][i][k].set_data(bg_m.weight_times, bg_m.weights_over_time[(ct, i, k)])
-                bg_m.axs[bg_m.row_weights][bg_m.col_weights+i].set_xlim(0, max(bg_m.plot_interval, int(h.t)))
-                all_weights = [w for lst in bg_m.weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
-                ymin, ymax = min(all_weights), max(all_weights)
-                bg_m.axs[bg_m.row_weights][bg_m.col_weights+i].set_ylim(ymin*0.9, ymax*1.1)
-
-                # Reward plot
-                input_key = f"{i}{i in bg_m.target_actions}"
-                bg_m.expected_reward_lines[i][0].set_data(bg_m.reward_times, bg_m.expected_reward_over_time[input_key])
-                bg_m.reward_lines[i][0].set_data(bg_m.reward_times, bg_m.reward_over_time[i])
-                bg_m.dopamine_lines[i][0].set_data(bg_m.reward_times, bg_m.dopamine_over_time[i])
-                bg_m.activation_lines[i][0].set_data(bg_m.activation_times, bg_m.activation_over_time[i])
-                bg_m.target_activation_lines[i][0].set_data(bg_m.activation_times, bg_m.target_activation_over_time[i])
-                bg_m.axs[bg_m.row_reward][bg_m.col_reward+i].set_xlim(0, max(bg_m.plot_interval, int(h.t)))
+            bg_m.cortical_input_stimuli(current_time=h.t)
+            bg_m.update_weights(current_time=h.t)
+            bg_m.update_plots(current_time=h.t)
 
             bg_m.fig.canvas.draw_idle()   
             bg_m.fig.canvas.flush_events() 
@@ -732,118 +852,11 @@ except KeyboardInterrupt:
     plt.close()
 
 finally:
-    # Workbook
-    wb = Workbook()
+
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = f"Data\{timestamp}"
 
-    # Worksheet for General Details
-    ws_globals = wb.active
-    ws_globals.title = "GlobalVariables"
-
-    row = 1
-
-    # --- Dictionaries ---
-    def write_dict(name, data):
-        global row
-        ws_globals.cell(row=row, column=1, value=name)
-        row += 1
-        for k, v in data.items():
-            ws_globals.cell(row=row, column=1, value=str(k))
-            ws_globals.cell(row=row, column=2, value=v)
-            row += 1
-        row += 1
-
-    write_dict("cell_types_numbers", bg_m.cell_types_numbers)
-    write_dict("stim_intervals", bg_m.stim_intervals)
-    write_dict("stim_weights", bg_m.stim_weights)
-
-    # --- Lists ---
-    def write_list(name, lst):
-        global row
-        ws_globals.cell(row=row, column=1, value=name)
-        for i, val in enumerate(lst):
-            ws_globals.cell(row=row + 1 + i, column=1, value=val)
-        row += len(lst) + 2
-
-    write_list("target_actions", bg_m.target_actions)
-    write_list("cortical_input_dur_rel", bg_m.cortical_input_dur_rel)
-
-    # --- Tuples/List of Tuples ---
-    def write_tuples(name, tuples_list):
-        global row
-        ws_globals.cell(row=row, column=1, value=name)
-        for i, tup in enumerate(tuples_list):
-            for j, val in enumerate(tup):
-                ws_globals.cell(row=row + 1 + i, column=1 + j, value=val)
-        row += len(tuples_list) + 2
-
-    write_tuples("connection_specs", bg_m.connection_specs)
-
-    # --- Scalars ---
-    scalars = {
-        "N_actions": bg_m.N_actions,
-        "plot_interval": bg_m.plot_interval,
-        "bin_width_firing_rate": bg_m.bin_width_firing_rate,
-        "n_spikes_SNc_burst": bg_m.n_spikes_SNc_burst,
-        "selection_threshold": bg_m.selection_threshold,
-        "learning_rate": bg_m.learning_rate,
-        "expected_reward_value": bg_m.expected_reward_value,
-        "noise": bg_m.noise,
-        "simulation_stop_time": bg_m.simulation_stop_time
-
-    }
-    write_dict("Scalars", scalars)
-
-    # Worksheet for Weights
-    ws_weights = wb.create_sheet(title="WeightsOverTime")
-
-    # Header
-    header = ['time']
-    keys = sorted(bg_m.weights_over_time.keys())
-    header.extend(f"{ct}_a{a}_n{i}" for ct, a, i in keys)
-    ws_weights.append(header)
-
-    # Rows
-    max_len = len(bg_m.weight_times)
-    for t_idx in range(max_len):
-        row = [bg_m.weight_times[t_idx]]
-        for key in keys:
-            val = bg_m.weights_over_time[key][t_idx] if t_idx < len(bg_m.weights_over_time[key]) else None
-            row.append(val)
-        ws_weights.append(row)
-
-    # Worksheets
-    data_list = [
-        ("ExpectedRewardOverTime", bg_m.expected_reward_over_time), 
-        ("RewardOverTime", bg_m.reward_over_time), 
-        ("DopamineOverTime", bg_m.dopamine_over_time)
-        ]
-    ws_list = []
-    for name, data in data_list:
-        ws = wb.create_sheet(title=f"{name}")
-        
-        # Header
-        header = ['time']
-        keys = sorted(data.keys())
-        header.extend(f"{key}" for key in keys)
-        ws.append(header)
-
-        # Rows
-        max_len = len(bg_m.reward_times)
-        for t_idx in range(max_len):
-            row = [bg_m.reward_times[t_idx]]
-            for key in keys:
-                val = data[key][t_idx] if t_idx < len(data[key]) else None
-                row.append(val)
-            ws.append(row)
-
-        ws_list.append(ws)
-
-    # Save
-    wb.save(f"{path}.xlsx") # Excel
+    bg_m.save_data(path) # Excel file
     bg_m.fig.savefig(f"{path}.png", dpi=300, bbox_inches='tight') # GUI Screenshot
 
     print(f"Data saved as {path}")
-
-
