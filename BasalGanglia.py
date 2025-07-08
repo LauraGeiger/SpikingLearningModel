@@ -795,7 +795,9 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2, noise=0):
 
 
 # Basal Ganglia Loops
-actions = ["Precision pinch", "Power grasp"]
+grasp_types = {"Precision pinch": [1, 1, 1, 0, 0, 0],
+               "Power grasp": [1, 1, 1, 1, 1, 1]}
+actions = list(grasp_types.keys())
 bg_p = BasalGanglia('PrefrontalLoop', actions)
 actions = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
 bg_m = BasalGanglia('MotorLoop', actions)
