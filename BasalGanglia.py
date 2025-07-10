@@ -35,8 +35,6 @@ class BasalGanglia:
         self.binary_input = binary_input
         self.single_goal = single_goal
         self.goal_action_table = goal_action_table
-        print(self.goal_action_table.keys())
-        print(self.goal_action_table.values())
 
         self.cell_types_numbers = {'SNc': 5, 'MSNd': 5, 'MSNi': 5, 'GPe': 5, 'GPi': 5, 'Thal': 5}
         self.cell_types = list(self.cell_types_numbers.keys())
@@ -94,10 +92,11 @@ class BasalGanglia:
         self.dopamine_over_time = {}
         self.weight_cell_types = ['MSNd', 'MSNi']
         self.weight_times = []
-        self.weights_over_time = {(ct, a, i): [] 
+        self.weights_over_time = {(ct, action, k, goal): [] 
                             for ct in self.weight_cell_types
-                            for a, _ in enumerate(self.actions) 
-                            for i in range(self.cell_types_numbers[ct])
+                            for action in self.actions
+                            for k in range(self.cell_types_numbers[ct])
+                            for goal in self.goals 
                             }
         self.apc_refs = []
 
@@ -198,13 +197,14 @@ class BasalGanglia:
             self.stims.update({f'Cor_{ct}': []})
             self.syns.update({f'Cor_{ct}': []})
             self.ncs.update({f'Cor_{ct}': []})
-            for a, _ in enumerate(self.actions):
+            for a, action in enumerate(self.actions):
                 for k, cell in enumerate(self.cells[ct][a]):
                     stim, syn, nc = create_stim(cell, start=0, interval=self.stim_intervals['Cor'], weight=self.stim_weights['Cor'], noise=self.noise)
                     self.stims[f'Cor_{ct}'].append(stim)
                     self.syns[f'Cor_{ct}'].append(syn)
                     self.ncs[f'Cor_{ct}'].append(nc)
-                    self.weights_over_time[(ct, a, k)].append(self.stim_weights['Cor'])
+                    for goal in self.goals:
+                        self.weights_over_time[(ct, action, k, goal)].append(self.stim_weights['Cor'])
             for nc in self.ncs[f'Cor_{ct}']:
                 nc.active(False)
 
@@ -318,7 +318,7 @@ class BasalGanglia:
                     self.weight_lines[ct][i] = []
                     for k in range(self.cell_types_numbers[ct]):
                         label = ct if k == 0 else None  # Only label the first line
-                        line, = self.axs_plot[self.row_weights][i].step([], [], f'C{j}', label=label)
+                        line, = self.axs_plot[self.row_weights][i].step([], [], f'C{j}', label=label, where='post')
                         self.weight_lines[ct][i].append(line)
 
             self.axs_plot[self.row_weights][i].set_xlim(0, self.plot_interval)
@@ -368,32 +368,29 @@ class BasalGanglia:
         for i, goal_name in enumerate(self.goals_names):
             ax_cor_dur = self.axs_control[1+i].inset_axes([0,0,0.9,0.45]) #[x0, y0, width, height]
             ax_cor_dur.set_title(goal_name)
-            print(f" i = {i} self.cortical_input_dur_relself.cortical_input_dur_rel = {self.cortical_input_dur_rel} self.goals = {self.goals}")
             self.buttons[f'cor_dur_slider{i}'] = Slider(ax_cor_dur, '', 0, 1, valinit=self.cortical_input_dur_rel[i], valstep=1 if self.binary_input else 0.2)
             self.buttons[f'cor_dur_slider{i}'].on_changed(lambda val, i=i: self.update_cor_dur(val=val, goal_idx=i))
 
-    def update_stimulus_activation(self, cell, stimulus, actions=None, active=True):
-        if actions == None:
-            actions = list(range(len(self.actions)))
+    def update_stimulus_activation(self, cell, stimulus, action, active=True):
         i = 0
-        for a, _ in enumerate(self.actions):
-            for _ in self.cells[cell][a]:
-                if a in actions:
+        for a_id, a in enumerate(self.actions):
+            for _ in self.cells[cell][a_id]:
+                if a == action:
                     self.ncs[stimulus][i].active(active)
                 i += 1
 
-    def SNc_dip(self, event=None, actions=None):
-        self.update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
-        h.cvode.event(h.t + self.stim_intervals['SNc'], lambda actions=actions: self.update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
+    def SNc_dip(self, event=None, action=None):
+        self.update_stimulus_activation(cell='SNc', stimulus='SNc', action=action, active=False) # stop SNc tonic stimulus
+        h.cvode.event(h.t + self.stim_intervals['SNc'], lambda action=action: self.update_stimulus_activation(cell='SNc', stimulus='SNc', action=action, active=True))  # start SNc tonic stimulus
 
-    def SNc_burst(self, event=None, actions=None, n_spikes=None):
-        self.update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=False) # stop SNc tonic stimulus
-        self.update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=True) # start SNc burst stimulus
+    def SNc_burst(self, event=None, action=None, n_spikes=None):
+        self.update_stimulus_activation(cell='SNc', stimulus='SNc', action=action, active=False) # stop SNc tonic stimulus
+        self.update_stimulus_activation(cell='SNc', stimulus='SNc_burst', action=action, active=True) # start SNc burst stimulus
         if n_spikes == None:
             n_spikes = self.n_spikes_SNc_burst
         delay = self.stim_intervals['SNc_burst'] * n_spikes
-        h.cvode.event(h.t + delay, lambda actions=actions: self.update_stimulus_activation(cell='SNc', stimulus='SNc_burst', actions=actions, active=False))  # stop SNc burst stimulus
-        h.cvode.event(h.t + delay, lambda actions=actions: self.update_stimulus_activation(cell='SNc', stimulus='SNc', actions=actions, active=True))  # start SNc tonic stimulus
+        h.cvode.event(h.t + delay, lambda action=action: self.update_stimulus_activation(cell='SNc', stimulus='SNc_burst', action=action, active=False))  # stop SNc burst stimulus
+        h.cvode.event(h.t + delay, lambda action=action: self.update_stimulus_activation(cell='SNc', stimulus='SNc', action=action, active=True))  # start SNc tonic stimulus
 
     def analyze_firing_rate(self, cell, window=None, average=True):
         """Returns a list of firing rates (Hz) for each action's cell population."""
@@ -460,44 +457,35 @@ class BasalGanglia:
         self._is_updating_programmatically = False
 
     def select_action_with_highest_differential_weight(self):
-        best_action = None
-        max_avg_diff = float('-inf')
-
-        for a, _ in enumerate(self.actions):
-            # Sum weights for MSNd
-            msnd_weights = [
-                self.ncs['Cor_MSNd'][a * self.cell_types_numbers['MSNd'] + k].weight[0]
-                for k in range(self.cell_types_numbers['MSNd'])
-            ]
-            msni_weights = [
-                self.ncs['Cor_MSNi'][a * self.cell_types_numbers['MSNi'] + k].weight[0]
-                for k in range(self.cell_types_numbers['MSNi'])
-            ]
-
-            # Compute averages
-            avg_msnd = sum(msnd_weights) / self.cell_types_numbers['MSNd']
-            avg_msni = sum(msni_weights) / self.cell_types_numbers['MSNi']
-
-            avg_diff = avg_msnd - avg_msni
-
-            # Track best action
-            if avg_diff > max_avg_diff:
-                max_avg_diff = avg_diff
-                best_action = a
+        goal_key = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
         
+        weight_diffs = {}
+        weight_avgs = {}
+        weights = {}
+
+        for action in self.actions:
+            weight_diffs[action] = []
+            for ct in self.weight_cell_types:
+                weights[ct] = []
+                for k in range(self.cell_types_numbers[ct]):
+                    weight = self.weights_over_time[(ct, action, k, goal_key)][-1]
+                    weights[ct].append(weight)
+                weight_avgs[ct] = sum(weights[ct]) / self.cell_types_numbers[ct]
+            weight_diffs[action].append(weight_avgs['MSNd'] - weight_avgs['MSNi'])
+
+        best_action = max(weight_diffs, key=weight_diffs.get)
+
         return best_action
 
     def cortical_input_stimuli(self, current_time):
-        target_actions = [i for i, val in enumerate(self.cortical_input_dur_rel) if val != 0]
-
         best_action = self.select_action_with_highest_differential_weight()
-        print(f"{self.name} best action = {best_action}")
 
-        h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=target_actions, active=True))  # start cortical input stimulus for that action
-        h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=target_actions, active=True))  # start cortical input stimulus for that action
-        for action in target_actions:
-            h.cvode.event(current_time + self.cortical_input_dur_rel[action] * self.plot_interval/2, lambda action=best_action: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', actions=[action], active=False)) # stop cortical input stimulus for that action
-            h.cvode.event(current_time + self.cortical_input_dur_rel[action] * self.plot_interval/2, lambda action=best_action: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', actions=[action], active=False)) # stop cortical input stimulus for that action
+        h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', action=best_action, active=True))  # start cortical input stimulus for that action
+        h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', action=best_action, active=True))  # start cortical input stimulus for that action
+        h.cvode.event(current_time + self.plot_interval/2, lambda action=best_action: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', action=best_action, active=False)) # stop cortical input stimulus for that action
+        h.cvode.event(current_time + self.plot_interval/2, lambda action=best_action: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', action=best_action, active=False)) # stop cortical input stimulus for that action
+        #h.cvode.event(current_time + self.cortical_input_dur_rel[action] * self.plot_interval/2, lambda action=best_action: self.update_stimulus_activation(cell='MSNd', stimulus=f'Cor_MSNd', action=best_action, active=False)) # stop cortical input stimulus for that action
+        #h.cvode.event(current_time + self.cortical_input_dur_rel[action] * self.plot_interval/2, lambda action=best_action: self.update_stimulus_activation(cell='MSNi', stimulus=f'Cor_MSNi', action=best_action, active=False)) # stop cortical input stimulus for that action
             
     def analyze_thalamus_activation_time(self, current_time):
         self.activation_times.append(int(current_time))
@@ -537,44 +525,36 @@ class BasalGanglia:
                         self.activation_over_time[action].append(longest_duration/(self.plot_interval/2))
                         #self.target_activation_over_time[i].append(self.cortical_input_dur_rel[i] if self.cortical_input_dur_rel[i] != 0 else 0)
   
-    def select_actions(self, current_time):
-        if output: 
-            self.rates['Thal'], self.rates_rel['Thal'] = self.analyze_firing_rate('Thal', window=self.plot_interval/2)
-            print(f"{int(current_time)} ms: Target Actions = {[i for i, val in enumerate(self.cortical_input_dur_rel) if val != 0]}, Selected Actions = {self.selected_actions}, Rates Thal = {self.rates['Thal']}, Rates Thal relative = {self.rates_rel['Thal']}")
-        self.selected_actions = [i for i, activations in self.activation_over_time.items() if activations[-1] > 0]
-        
+    def select_action(self, current_time):
         active_actions = [(i, activations[-1]) for i, activations in self.activation_over_time.items() if activations[-1] > 0]
         if active_actions:
             # Pick the action with the maximum last activation value
-            self.selected_action = max(active_actions, key=lambda x: x[1])[0]
+            self.selected_action = max(active_actions, key=lambda x: x[1])
         else:
             # No active actions found
             self.selected_action = []
-        selected_actions_and_activation_times = {i: activations[-1] for i, activations in self.activation_over_time.items() if i in self.selected_actions}
-        if self.child_loop is not None and len(self.selected_actions) > 0:
-            for action_id, action in enumerate(self.selected_actions):
-                self.child_loop.buttons[f'cor_dur_slider{action_id}'].set_val(selected_actions_and_activation_times[action])
+        
+        if self.child_loop is not None and self.selected_action:
+            # Set input of child loop based on output of current loop
+            for id, state in enumerate(list(map(int, self.selected_action[0]))):
+                self.child_loop.buttons[f'cor_dur_slider{id}'].set_val(0 if state == 0 else self.selected_action[1])
 
     def determine_reward(self, current_time):
         self.reward_times.append(int(current_time))
-
-        if self.single_goal == False:
-            return
         
         goal_state = tuple((goal_name, dur != 0) for goal_name, dur in zip(self.goals_names, self.cortical_input_dur_rel))
-        print(f"goal_state = {goal_state}")
+        #print(f"goal_state = {goal_state}")
         target_actions = self.goal_action_table.get(goal_state, {})
-        print(f"target_actions = {target_actions}")
+        #print(f"target_actions = {target_actions}")
         target_action_indices = ''.join('1' if v else '0' for v in target_actions.values())
         print(f"target_action_indice = {target_action_indices}")
         print(f"selected action = {self.selected_action}")
+        
+        goal_key = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
         print(f"goal_key = {goal_key}")
 
-        #goal_key = [i for i, val in enumerate(self.cortical_input_dur_rel) if val != 0]
-        goal_key = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
-        
         for goal in self.goals:
-            if goal == goal_key and self.selected_action == target_action_indices:
+            if goal == goal_key and self.selected_action and self.selected_action[0] == target_action_indices:
                 self.reward_over_time[goal].append(1)
             else:
                 self.reward_over_time[goal].append(0)
@@ -582,9 +562,9 @@ class BasalGanglia:
             current_expected_reward = self.expected_reward_over_time[goal][-1]
             self.dopamine_over_time[goal].append(round(self.reward_over_time[goal][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
             if self.reward_over_time[goal][-1] - current_expected_reward > 0:
-                self.SNc_burst(event=None, actions=[goal])
+                self.SNc_burst(event=None, action=goal)
             elif self.reward_over_time[goal][-1] - current_expected_reward < 0:
-                self.SNc_dip(event=None, actions=[goal])
+                self.SNc_dip(event=None, action=goal)
 
             # Update expected reward based on actual reward
             self.expected_reward_over_time[goal].append(round(current_expected_reward + 0.1 * (self.reward_over_time[goal][-1] - current_expected_reward), 4))
@@ -601,22 +581,23 @@ class BasalGanglia:
 
         # Update weights
         self.weight_times.append(int(current_time))
-        for a, _ in enumerate(self.actions):
-            for ct in self.weight_cell_types:
-                for k in range(self.cell_types_numbers[ct]):
-                    delta_w = 0
-                    if ct == 'MSNd':
-                        # dopamine facilitates active MSNd and inhibits less active MSNd
-                        delta_w = self.learning_rate * self.rates_rel[ct][a][k] * self.dopamine_over_time[a][-1] # rel_rate = 1 corresponds to tonic baseline activity
-                    elif ct == 'MSNi':
-                        # high dopamine increases inhibition, low dopamine suppresses inhibition
-                        delta_w = - self.learning_rate * self.dopamine_over_time[a][-1]
-                    idx = a * self.cell_types_numbers[ct] + k
-                    new_weight = max(0, self.weights_over_time[(ct, a, k)][-1] + delta_w) # Update weight ensure weight is non-zero
-                    self.weights_over_time[(ct, a, k)].append(round(new_weight, 4))
-                    self.ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
-                    #self.ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
-            if output: print(f"{self.weight_times[-1]} ms: Action {a}: rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in self.rates_rel['MSNd'][a]]}, rel rate SNc = {self.rates_rel['SNc'][a]:.2f}, Exp. Reward = {self.expected_reward_over_time[f'{a}{self.cortical_input_dur_rel[a] != 0}'][-1]:.2f}, DA = {self.dopamine_over_time[a][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNd'][a*self.cell_types_numbers['MSNd']:(a+1)*self.cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNi'][a*self.cell_types_numbers['MSNi']:(a+1)*self.cell_types_numbers['MSNi']]]}")               
+        for action_id, action in enumerate(self.actions):
+            for goal_id, goal in enumerate(self.goals): #a, _ in enumerate(self.actions):
+                for ct in self.weight_cell_types:
+                    for k in range(self.cell_types_numbers[ct]):
+                        delta_w = 0
+                        if ct == 'MSNd':
+                            # dopamine facilitates active MSNd and inhibits less active MSNd
+                            delta_w = self.learning_rate * self.rates_rel[ct][action_id][k] * self.dopamine_over_time[goal][-1] # rel_rate = 1 corresponds to tonic baseline activity
+                        elif ct == 'MSNi':
+                            # high dopamine increases inhibition, low dopamine suppresses inhibition
+                            delta_w = - self.learning_rate * self.dopamine_over_time[goal][-1]
+                        idx = action_id * self.cell_types_numbers[ct] + k
+                        new_weight = max(0, self.weights_over_time[(ct, action, k, goal)][-1] + delta_w) # Update weight ensure weight is non-zero
+                        self.weights_over_time[(ct, action, k, goal)].append(round(new_weight, 4))
+                        self.ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
+                        #self.ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
+                if output: print(f"{self.weight_times[-1]} ms: Action {action}: Goal {goal} rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in self.rates_rel['MSNd'][action_id]]}, rel rate SNc = {self.rates_rel['SNc'][action_id]:.2f}, Exp. Reward = {self.expected_reward_over_time[f'{goal}{self.cortical_input_dur_rel[goal] != 0}'][-1]:.2f}, DA = {self.dopamine_over_time[goal][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNd'][action_id*self.cell_types_numbers['MSNd']:(action_id+1)*self.cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNi'][action_id*self.cell_types_numbers['MSNi']:(action_id+1)*self.cell_types_numbers['MSNi']]]}")               
                  
     def update_plots(self, current_time):
         # Update plots
@@ -678,24 +659,25 @@ class BasalGanglia:
                         self.rate_lines[ct][action_id].set_data([], [])
                 y_base -= self.cell_types_numbers[ct]
             self.axs_plot[self.row_spike][action_id].set_xlim(max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
-            
+        
+            goal_key = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
+
             # Weight plot
             for ct in self.weight_cell_types:
                 for k in range(self.cell_types_numbers[ct]):
-                    self.weight_lines[ct][action_id][k].set_data(self.weight_times, self.weights_over_time[(ct, action_id, k)])
+                    self.weight_lines[ct][action_id][k].set_data(self.weight_times, self.weights_over_time[(ct, action, k, goal_key)])
             self.axs_plot[self.row_weights][action_id].set_xlim(0, max(self.plot_interval, int(current_time)))
             all_weights = [w for lst in self.weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
             ymin, ymax = min(all_weights), max(all_weights)
             self.axs_plot[self.row_weights][action_id].set_ylim(ymin*0.9, ymax*1.1)
 
-            # Reward plot
-            goal_key = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
-            self.expected_reward_lines[action_id].set_data(self.reward_times, self.expected_reward_over_time[goal_key])
-            self.reward_lines[action_id].set_data(self.reward_times, self.reward_over_time[action])
-            self.dopamine_lines[action_id].set_data(self.reward_times, self.dopamine_over_time[action])
-            self.activation_lines[action_id].set_data(self.activation_times, self.activation_over_time[action])
-            #self.target_activation_lines[action_id].set_data(self.activation_times, self.target_activation_over_time[action])
-            self.axs_plot[self.row_reward][action_id].set_xlim(0, max(self.plot_interval, int(current_time)))
+        # Reward plot
+        self.expected_reward_lines[0].set_data(self.reward_times, self.expected_reward_over_time[goal_key])
+        self.reward_lines[0].set_data(self.reward_times, self.reward_over_time[goal_key])
+        self.dopamine_lines[0].set_data(self.reward_times, self.dopamine_over_time[goal_key])
+        self.activation_lines[0].set_data(self.activation_times, self.activation_over_time[goal_key])
+        #self.target_activation_lines[0].set_data(self.activation_times, self.target_activation_over_time[goal_key])
+        self.axs_plot[self.row_reward][0].set_xlim(0, max(self.plot_interval, int(current_time)))
     
     def save_data(self, path):
         # Workbook
@@ -866,7 +848,7 @@ actuators = ["Thumb oppositor", "Thumb flexor"]
 grasp_type_joint_mapping = {"10": "00", # Precision pinch
                               "01": "11"} # Power grasp
 grasp_type_joint_table = create_goal_action_table(mapping=grasp_type_joint_mapping, goals=grasp_types, actions=joints)
-print(grasp_type_joint_table)
+#print(grasp_type_joint_table)
 
 joint_actuator_mapping = {"10": "10", 
                             "01": "01"}
@@ -880,37 +862,36 @@ bg = [bg_m, bg_p]
 #--- Simulation ---------------------------------------------------------------------------------------------------------------------------------------------------#
 h.dt = 1
 h.finitialize()
-
 state = 0  
 
 try:
     while True:
-        any_paused = any(loop.paused for loop in bg)
-        all_inputs_zero = all(all(val == 0 for val in loop.cortical_input_dur_rel) for loop in bg)
-        if any_paused or all_inputs_zero:
+        #any_paused = any(loop.paused for loop in bg)
+        #all_inputs_zero = all(all(val == 0 for val in loop.cortical_input_dur_rel) for loop in bg)
+        #if any_paused or all_inputs_zero:
+        if bg[-1].paused or all(val == 0 for val in bg[-1].cortical_input_dur_rel): # parent loop controls simulation
             # Simulation paused
             time.sleep(0.1)
             for loop in bg:
                 loop.fig.canvas.draw_idle()   
                 loop.fig.canvas.flush_events()
-            plt.pause(0.1)
             continue
 
         # Run simulation for half of the interval
-        h.continuerun(h.t + loop.plot_interval // 2)
+        h.continuerun(h.t + bg_m.plot_interval // 2)
 
         # --- Action selection and reward update ---#
         if state == 0: # executed after half time of plot_interval
             for loop in bg:
                 loop.analyze_thalamus_activation_time(current_time=h.t)
-                loop.select_actions(current_time=h.t)
+                loop.select_action(current_time=h.t)
                 loop.determine_reward(current_time=h.t)
 
         # --- Weight and plot update ---#  
         else: # executed after full time of plot_interval
             for loop in bg:
                 loop.cortical_input_stimuli(current_time=h.t)
-                #loop.update_weights(current_time=h.t)
+                loop.update_weights(current_time=h.t)
                 loop.update_plots(current_time=h.t)
 
                 loop.fig.canvas.draw_idle()   
@@ -934,6 +915,4 @@ finally:
 
     for loop in bg:
         loop.save_data(path) # Excel file
-        loop.fig.savefig(f"{path}.png", dpi=300, bbox_inches='tight') # GUI Screenshot
-
-    print(f"{path}")
+        loop.fig.savefig(f"{path}_{loop.name}.png", dpi=300, bbox_inches='tight') # GUI Screenshot
