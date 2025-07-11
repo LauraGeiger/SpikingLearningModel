@@ -76,7 +76,6 @@ class BasalGanglia:
         ]
         self._is_updating_programmatically = False
         self.paused = False
-        #self.target_actions = []
         self.noise = 0
         self.selection_threshold = 0.8
         self.n_spikes_SNc_burst = 5
@@ -85,7 +84,6 @@ class BasalGanglia:
         self.activation_times = []
         self.expected_reward_over_time = {}
         self.activation_over_time = {}
-        #self.target_activation_over_time = {}
         self.cortical_input_dur_rel = [0] * len(self.goals_names)
         self.expected_reward_value = 0.2
         self.reward_over_time = {}
@@ -224,7 +222,6 @@ class BasalGanglia:
         self.activation_times.append(0)
         for action in self.actions:
             self.activation_over_time[action] = [0]
-            #self.target_activation_over_time[action] = [0]
 
     def _init_recording(self):
         # Recording
@@ -311,6 +308,7 @@ class BasalGanglia:
         # Weight plot
         self.axs_plot[self.row_weights][0].set_ylabel('Cortical input weight')
         self.weight_lines = {ct: [[] for _ in range(self.actions_to_plot)] for ct in self.weight_cell_types}
+        self.activation_lines = []
 
         for i, ch in enumerate(range(self.actions_to_plot)):
             for j, ct in enumerate(self.cell_types):
@@ -320,6 +318,9 @@ class BasalGanglia:
                         label = ct if k == 0 else None  # Only label the first line
                         line, = self.axs_plot[self.row_weights][i].step([], [], f'C{j}', label=label, where='post')
                         self.weight_lines[ct][i].append(line)
+
+            activation_line, = self.axs_plot[self.row_weights][i].step([], [], 'C7', linestyle='dashed', label='Activation time')
+            self.activation_lines.append(activation_line)
 
             self.axs_plot[self.row_weights][i].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_weights][i].set_ylim(0, 3)
@@ -331,28 +332,22 @@ class BasalGanglia:
         self.expected_reward_lines = []
         self.reward_lines = []
         self.dopamine_lines = []
-        self.activation_lines = []
-        self.target_activation_lines = []
+        #self.activation_lines = []
 
         for i, ch in enumerate(range(self.actions_to_plot)):
             expected_reward_line, = self.axs_plot[self.row_reward][i].plot([], [], 'C9', label='Expected reward')
             reward_line, = self.axs_plot[self.row_reward][i].step([], [], 'C8', label='Reward')
             dopamine_line, = self.axs_plot[self.row_reward][i].plot([], [], 'C6', label='Dopamine')
-            activation_line, = self.axs_plot[self.row_reward][i].step([], [], 'C7', linestyle='dashed', label='Activation time')
-            target_activation_line,  = self.axs_plot[self.row_reward][i].step([], [], color='blue', linestyle='dotted', label=f'Target act. time')
+            #activation_line, = self.axs_plot[self.row_reward][i].step([], [], 'C7', linestyle='dashed', label='Activation time')
             self.expected_reward_lines.append(expected_reward_line)
             self.reward_lines.append(reward_line)
             self.dopamine_lines.append(dopamine_line)
-            self.activation_lines.append(activation_line)
-            self.target_activation_lines.append(target_activation_line)
+            #self.activation_lines.append(activation_line)
             
             self.axs_plot[self.row_reward][i].set_xlabel('Simulation time (ms)')
             self.axs_plot[self.row_reward][i].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_reward][i].set_ylim(-1.1, 1.1)
         self.axs_plot[self.row_reward][-1].legend(loc='upper right')
-
-        for a in range(self.actions_to_plot):
-            self.target_activation_lines[a].set_visible(False)
 
     def _init_control_panel(self):
         #--- Upper control panel ---#
@@ -523,7 +518,6 @@ class BasalGanglia:
                                 if duration > longest_duration:
                                     longest_duration = duration
                         self.activation_over_time[action].append(longest_duration/(self.plot_interval/2))
-                        #self.target_activation_over_time[i].append(self.cortical_input_dur_rel[i] if self.cortical_input_dur_rel[i] != 0 else 0)
   
     def select_action(self, current_time):
         active_actions = [(i, activations[-1]) for i, activations in self.activation_over_time.items() if activations[-1] > 0]
@@ -547,11 +541,11 @@ class BasalGanglia:
         target_actions = self.goal_action_table.get(goal_state, {})
         #print(f"target_actions = {target_actions}")
         target_action_indices = ''.join('1' if v else '0' for v in target_actions.values())
-        print(f"target_action_indice = {target_action_indices}")
-        print(f"selected action = {self.selected_action}")
+        #print(f"target_action_indice = {target_action_indices}")
+        #print(f"selected action = {self.selected_action}")
         
         goal_key = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
-        print(f"goal_key = {goal_key}")
+        #print(f"goal_key = {goal_key}")
 
         for goal in self.goals:
             if goal == goal_key and self.selected_action and self.selected_action[0] == target_action_indices:
@@ -561,10 +555,11 @@ class BasalGanglia:
                 
             current_expected_reward = self.expected_reward_over_time[goal][-1]
             self.dopamine_over_time[goal].append(round(self.reward_over_time[goal][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
-            if self.reward_over_time[goal][-1] - current_expected_reward > 0:
-                self.SNc_burst(event=None, action=goal)
-            elif self.reward_over_time[goal][-1] - current_expected_reward < 0:
-                self.SNc_dip(event=None, action=goal)
+            for action in self.actions:
+                if self.reward_over_time[goal][-1] - current_expected_reward > 0:
+                    self.SNc_burst(event=None, action=action)
+                elif self.reward_over_time[goal][-1] - current_expected_reward < 0:
+                    self.SNc_dip(event=None, action=action)
 
             # Update expected reward based on actual reward
             self.expected_reward_over_time[goal].append(round(current_expected_reward + 0.1 * (self.reward_over_time[goal][-1] - current_expected_reward), 4))
@@ -579,26 +574,30 @@ class BasalGanglia:
         #print(f"dopamine over time: {dopamine_over_time}")
         #print(f"rel SNc rate: {rates_rel['SNc']}")
 
+        goal_key = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
+
         # Update weights
         self.weight_times.append(int(current_time))
         for action_id, action in enumerate(self.actions):
-            for goal_id, goal in enumerate(self.goals): #a, _ in enumerate(self.actions):
+            for goal_id, goal in enumerate(self.goals):
                 for ct in self.weight_cell_types:
                     for k in range(self.cell_types_numbers[ct]):
                         delta_w = 0
                         if ct == 'MSNd':
                             # dopamine facilitates active MSNd and inhibits less active MSNd
-                            delta_w = self.learning_rate * self.rates_rel[ct][action_id][k] * self.dopamine_over_time[goal][-1] # rel_rate = 1 corresponds to tonic baseline activity
+                            delta_w = self.learning_rate * (self.rates_rel[ct][action_id][k] - 1) * self.dopamine_over_time[goal][-1] # rel_rate = 1 corresponds to tonic baseline activity
                         elif ct == 'MSNi':
                             # high dopamine increases inhibition, low dopamine suppresses inhibition
-                            delta_w = - self.learning_rate * self.dopamine_over_time[goal][-1]
+                            delta_w = - self.learning_rate * (self.rates_rel[ct][action_id][k] - 1) * self.dopamine_over_time[goal][-1]
                         idx = action_id * self.cell_types_numbers[ct] + k
                         new_weight = max(0, self.weights_over_time[(ct, action, k, goal)][-1] + delta_w) # Update weight ensure weight is non-zero
+                        if self.name == "PrefrontalLoop" and goal == goal_key: print(f"{current_time} action = {action} goal = {goal} ct = {ct} k = {k} new_weight = {new_weight} ")
                         self.weights_over_time[(ct, action, k, goal)].append(round(new_weight, 4))
                         self.ncs[f'Cor_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
                         #self.ncs[f'{ct}'][idx].weight[0] = new_weight # update weight of tonical stimulation 
                 if output: print(f"{self.weight_times[-1]} ms: Action {action}: Goal {goal} rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in self.rates_rel['MSNd'][action_id]]}, rel rate SNc = {self.rates_rel['SNc'][action_id]:.2f}, Exp. Reward = {self.expected_reward_over_time[f'{goal}{self.cortical_input_dur_rel[goal] != 0}'][-1]:.2f}, DA = {self.dopamine_over_time[goal][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNd'][action_id*self.cell_types_numbers['MSNd']:(action_id+1)*self.cell_types_numbers['MSNd']]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_MSNi'][action_id*self.cell_types_numbers['MSNi']:(action_id+1)*self.cell_types_numbers['MSNi']]]}")               
-                 
+        
+
     def update_plots(self, current_time):
         # Update plots
         for action_id, action in enumerate(self.actions):
@@ -669,14 +668,14 @@ class BasalGanglia:
             self.axs_plot[self.row_weights][action_id].set_xlim(0, max(self.plot_interval, int(current_time)))
             all_weights = [w for lst in self.weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
             ymin, ymax = min(all_weights), max(all_weights)
-            self.axs_plot[self.row_weights][action_id].set_ylim(ymin*0.9, ymax*1.1)
+            self.axs_plot[self.row_weights][action_id].set_ylim(0, ymax*1.1)#(ymin*0.9, ymax*1.1)
+            self.activation_lines[action_id].set_data(self.activation_times, self.activation_over_time[action])
 
         # Reward plot
         self.expected_reward_lines[0].set_data(self.reward_times, self.expected_reward_over_time[goal_key])
         self.reward_lines[0].set_data(self.reward_times, self.reward_over_time[goal_key])
         self.dopamine_lines[0].set_data(self.reward_times, self.dopamine_over_time[goal_key])
-        self.activation_lines[0].set_data(self.activation_times, self.activation_over_time[goal_key])
-        #self.target_activation_lines[0].set_data(self.activation_times, self.target_activation_over_time[goal_key])
+        #self.activation_lines[0].set_data(self.activation_times, self.activation_over_time[goal_key])
         self.axs_plot[self.row_reward][0].set_xlim(0, max(self.plot_interval, int(current_time)))
     
     def save_data(self, path):
