@@ -27,87 +27,239 @@ class BasalGanglia:
     def __init__(self, loops):
         self.loops = loops
         self.buttons = {}
+        self.paused = False
 
+        self._init_child_loops()
+        self._init_plotting()
+        self._init_simulation()
+
+        self.run_simulation()
+    
+    def _init_child_loops(self):
         for idx, loop in enumerate(self.loops):
             if idx > 0:
                 loop.set_child_loop(self.loops[idx-1])
-        
-        self._init_plotting()
-        self.ani = FuncAnimation(self.fig, self.update_selections, interval=1000, cache_frame_data=False)
-    
+
     def _init_plotting(self):
         plt.ion()
         self.fig = plt.figure(figsize=(13, 8))
         self.fig.canvas.manager.set_window_title('BasalGangliaOverview')
-        self.gs = gridspec.GridSpec(1, 2, figure=self.fig, width_ratios=[1,5])     
-        self.gs_loops = self.gs[0].subgridspec(1, len(self.loops))
-        self.gs_selections = self.gs[1].subgridspec(len(self.loops) + 1, 1)
+        self.gs = gridspec.GridSpec(2, 1, figure=self.fig, height_ratios=[1,10])  
+        self.gs_control = self.gs[0].subgridspec(1, 4)
+        self.gs_plot = self.gs[1].subgridspec(1, 4, width_ratios=[1,1,10,1])     
+        self.gs_loops = self.gs_plot[0].subgridspec(len(self.loops), 1)
+        self.gs_names = self.gs_plot[1].subgridspec(len(self.loops) + 1, 1)
+        self.gs_selections = self.gs_plot[2].subgridspec(len(self.loops) + 1, 1)
+        self.gs_probabilities = self.gs_plot[3].subgridspec(len(self.loops) + 1, 1)
 
+        self.axs_control = {}
         self.axs_selections = {}
         self.axs_loops = {}
+        self.axs_names = {}
+        self.axs_probabilities = {}
+
+        # Pause button
+        self.axs_control[0] = self.fig.add_subplot(self.gs_control[0])
+        self.axs_control[0].set_axis_off() 
+        ax_pause = self.axs_control[0].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+        self.buttons['pause'] = Button(ax_pause, 'Pause')
+        self.buttons['pause'].on_clicked(self.toggle_pause)
+
         for idx, loop in enumerate(self.loops):
             # Plot loop name
-            row = len(self.loops)-idx-1
-            height_ratios = [1*row, 2, 1*idx]
-            height_ratios_filtered = [x for x in height_ratios if x != 0]
-            height_ratios_scaled = [x * 1.2 if x > 1 else x for x in height_ratios_filtered]
-            sgs = self.gs_loops[row].subgridspec(len(height_ratios_filtered), 1, height_ratios=height_ratios_scaled)
-            self.axs_loops[idx] = [self.fig.add_subplot(sgs[i]) for i in range(len(height_ratios_filtered))]
-            for ax in self.axs_loops[idx]:
-                ax.set_axis_off() 
-            index_for_loop_name = height_ratios_filtered.index(2)
-            ax_text = self.axs_loops[idx][index_for_loop_name].inset_axes([0,0,1,1]) #[x0, y0, width, height]
-            ax_text.text(0.5, 0.5, f'{loop.name}', rotation=90, ha='center', va='center', transform=ax_text.transAxes)
-            self.buttons[f'{loop.name}'] = TextBox(ax_text, label='', textalignment='center')
+            self.axs_loops[idx] = self.fig.add_subplot(self.gs_loops[idx])
+            self.axs_loops[idx].set_axis_off() 
+            ax_loops = self.axs_loops[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+            ax_loops.text(0.5, 0.5, f'{loop.name}', rotation=90, ha='center', va='center', transform=ax_loops.transAxes)
+            self.buttons[f'{loop.name}'] = TextBox(ax_loops, label='', textalignment='center')
 
+            row = len(self.loops) - idx
             if idx == 0:
+                # Plot output group name
+                self.axs_names[idx] = self.fig.add_subplot(self.gs_names[row])
+                self.axs_names[idx].set_axis_off() 
+                ax_names = self.axs_names[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+                ax_names.set_axis_off()
+                output_group = 'Actuators'
+                ax_names.text(0.5, 0.5, s=output_group, ha='center', va='center', transform=ax_names.transAxes)
+
                 # Plot outputs of loop
-                row = len(self.loops)-idx
                 col = len(loop.actions_names)
                 sgs = self.gs_selections[row].subgridspec(1, col)
                 self.axs_selections[idx] = [self.fig.add_subplot(sgs[i]) for i in range(col)]
                 for i, name in enumerate(loop.actions_names):
                     self.axs_selections[idx][i].set_axis_off() 
-                    ax_text = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
-                    label = 'Actuators' if i == 0 else ''
-                    self.buttons[f'{name}'] = TextBox(ax_text, label=label, label_pad=0.05, initial=f'{name}', textalignment='center')
+                    ax_selections = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+                    self.buttons[f'{name}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{name}', color='None', textalignment='center')
+                
+                # Init probabilities
+                self.axs_probabilities[idx] = self.fig.add_subplot(self.gs_probabilities[row])
+                self.axs_probabilities[idx].set_axis_off()
+                self.axs_probabilities[idx].set_xlim(0, 1)
+                self.axs_probabilities[idx].set_ylim(0, 1)
+                # Plot a horizontal bar with width=prob
+                self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
+                    x=0.5, width=0.8, height=0, color='tab:cyan')[0]  # Get BarContainer object
+                ax_probabilities = self.axs_probabilities[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+                ax_probabilities.set_axis_off()
+                self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='', ha='center', va='center', transform=ax_probabilities.transAxes)
+
+            # Plot input group name
+            self.axs_names[idx+1] = self.fig.add_subplot(self.gs_names[row-1])
+            self.axs_names[idx+1].set_axis_off() 
+            ax_names = self.axs_names[idx+1].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+            ax_names.set_axis_off()
+            input_group = 'Joints' if idx == 0 else 'Grasp type'
+            ax_names.text(0.5, 0.5, s=input_group, ha='center', va='center', transform=ax_names.transAxes)
 
             # Plot inputs of loop  
-            row = len(self.loops)-idx-1 
             col = len(loop.goals_names)
-            sgs = self.gs_selections[row].subgridspec(1, col)
+            sgs = self.gs_selections[row-1].subgridspec(1, col)
             self.axs_selections[idx+1] = [self.fig.add_subplot(sgs[i]) for i in range(col)]
             for i, name in enumerate(loop.goals_names):
                     self.axs_selections[idx+1][i].set_axis_off() 
-                    ax_text = self.axs_selections[idx+1][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
-                    label = 'Joints' if i == 0 and idx == 0 else 'Grasp type' if i == 0 and idx == 1 else ''
-                    self.buttons[f'{name}'] = TextBox(ax_text, label=label, label_pad=0.05, initial=f'{name}', textalignment='center')
+                    ax_selections = self.axs_selections[idx+1][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+                    self.buttons[f'{name}'] = Button(ax_selections, label=f'{name}', color='None', hovercolor='lightgray')
+                    self.buttons[f'{name}'].on_clicked(lambda event, loop=loop, i=i: self.update_goals(loop, i))
+            
+            if idx == 1:
+                # Init probabilities
+                self.axs_probabilities[idx] = self.fig.add_subplot(self.gs_probabilities[row])
+                self.axs_probabilities[idx].set_axis_off() 
+                self.axs_probabilities[idx].set_xlim(0, 1)
+                self.axs_probabilities[idx].set_ylim(0, 1)
+                # Plot a horizontal bar with width=prob
+                self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
+                    x=0.5, width=0.8, height=0, color='tab:cyan')[0]  # Get BarContainer object
+                ax_probabilities = self.axs_probabilities[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+                ax_probabilities.set_axis_off()
+                self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='', ha='center', va='center', transform=ax_probabilities.transAxes)
+            
+    def _init_simulation(self):
+        h.dt = 1
+        h.finitialize()
 
-    def update_selections(self, frame):
+    def toggle_pause(self, event=None):
+        self.paused = not self.paused
+        self.buttons['pause'].label.set_text('Continue' if self.paused else 'Pause')
+        if not self.paused:
+            self.buttons['pause'].ax.set_facecolor(rcParams['axes.facecolor'])
+            self.buttons['pause'].color = '0.85'
+        else:
+            self.buttons['pause'].ax.set_facecolor('r')
+            self.buttons['pause'].color = 'r'
+        self.fig.canvas.draw_idle()
+
+    def update_selections(self, frame=None):
         for idx, loop in enumerate(self.loops):
-            #print('test')
+            if loop.selected_goal:
+                
+                visibility = False if set(loop.selected_goal) == {'0'} else True
+                self.update_probability(loop_id=idx, probability=loop.expected_reward_over_time[loop.selected_goal][-1], visibility=visibility)
+
             if idx == 0:
                 for i, name in enumerate(loop.actions_names):
                     if loop.selected_action:
                         char = loop.selected_action[0][i]
                         selected = char == '1'
-                        self.highlight_textbox(name, selected)
+                        reward = loop.reward_over_time[loop.selected_goal][-1]
+                        self.highlight_textbox(name, selected, reward)
             for i, name in enumerate(loop.goals_names):
                     if loop.selected_goal:
                         char = loop.selected_goal[i]
                         selected = char == '1'
-                        self.highlight_textbox(name, selected)
-                        
-
-    def highlight_textbox(self, name, selected):
+                        reward = None
+                        if idx < len(self.loops) - 1:
+                            if self.loops[idx+1].selected_goal:
+                                reward = self.loops[idx+1].reward_over_time[self.loops[idx+1].selected_goal][-1]
+                        self.highlight_textbox(name, selected, reward)
+    
+    def highlight_textbox(self, name, selected, reward):
         if selected:
-            self.buttons[f'{name}'].ax.set_facecolor('gold')
+            if reward:
+                self.buttons[f'{name}'].ax.set_facecolor('tab:olive')
+                self.buttons[f'{name}'].color = 'tab:olive'
+            else:
+                self.buttons[f'{name}'].ax.set_facecolor('gold')
+                self.buttons[f'{name}'].color = 'gold'
         else:
             self.buttons[f'{name}'].ax.set_facecolor(rcParams['axes.facecolor'])
+            self.buttons[f'{name}'].color = 'None'
 
+    def update_goals(self, loop, goal_idx):
+        if loop.selected_goal:
+            value = loop.selected_goal[goal_idx]=='0'
+        else:
+            value = 1
+        loop.buttons[f'cor_dur_slider{goal_idx}'].set_val(value)
+        loop.update_cor_dur(val=value, goal_idx=goal_idx)
 
+    def update_probability(self, loop_id, probability, visibility):
+        if visibility:
+            self.buttons[f'probability_{loop_id}'].set_text(f'{probability:.1%}')
+            self.buttons[f'probability_{loop_id}'].set_position((0.5, probability + 0.03))
+            self.buttons[f'probability_bar_{loop_id}'].set_height(probability)
+        else:
+            self.buttons[f'probability_{loop_id}'].set_text(f'')
+            self.buttons[f'probability_bar_{loop_id}'].set_height(0)
 
+    def run_simulation(self):
+        state = 0  
 
+        try:
+            while True:
+                if self.paused or all(all(val == 0 for val in loop.cortical_input_dur_rel) for loop in self.loops): 
+                    # Simulation paused
+                    time.sleep(0.1)
+                    for loop in self.loops:
+                        loop.fig.canvas.draw_idle()   
+                        loop.fig.canvas.flush_events()
+                    self.update_selections()
+                    continue
+                
+                # Update selections in basal ganglia overview plot
+                self.update_selections()
+
+                # Run simulation for half of the interval
+                h.continuerun(h.t + self.loops[0].plot_interval // 2)
+
+                # --- Action selection and reward update ---#
+                if state == 0: # executed after half time of plot_interval
+                    for loop in self.loops:
+                        loop.analyze_thalamus_activation_time(current_time=h.t)
+                        loop.select_action(current_time=h.t)
+                        loop.determine_reward(current_time=h.t)
+
+                # --- Weight and plot update ---#  
+                else: # executed after full time of plot_interval
+                    for loop in self.loops:
+                        loop.cortical_input_stimuli(current_time=h.t)
+                        loop.update_weights(current_time=h.t)
+                        loop.update_plots(current_time=h.t)
+
+                        loop.fig.canvas.draw_idle()   
+                        loop.fig.canvas.flush_events() 
+                    plt.pause(0.001)
+
+                state = 1 - state # toggle state
+
+                # Pause simulation
+                for loop in self.loops:
+                    if int(h.t) % loop.simulation_stop_time == 0:
+                        self.toggle_pause()
+            
+        except KeyboardInterrupt:
+                print("\nCtrl-C pressed. Storing data...")
+                plt.close()
+
+        finally:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            path = f"Data\{timestamp}"
+
+            for loop in self.loops:
+                loop.save_data(path) # Excel file
+                loop.fig.savefig(f"{path}_{loop.name}.png", dpi=300, bbox_inches='tight') # GUI Screenshot
+                        
 
 #--- BasalGangliaLoop ------------------------------------------------------------------------------------------------------------------------------------------------#
 
@@ -179,7 +331,7 @@ class BasalGangliaLoop:
             ('GPi', 'Thal', 'GPi_to_Thal', -85, 1.0,   10, 1)    # inhibitory
         ]
         self._is_updating_programmatically = False
-        self.paused = False
+        #self.paused = False
         self.noise = 0
         self.n_spikes_SNc_burst = 5
         self.learning_rate = 0.1
@@ -493,9 +645,9 @@ class BasalGangliaLoop:
     def _init_control_panel(self):
         #--- Upper control panel ---#
         #print(f"{self.name} width={self.axs_control[0].get_position().width}, height={self.axs_control[0].get_position().height}")
-        ax_pause = self.axs_control[0].inset_axes([0,0.5,1,0.5]) #[x0, y0, width, height]
-        self.buttons['pause'] = Button(ax_pause, 'Pause')
-        self.buttons['pause'].on_clicked(self.toggle_pause)
+        #ax_pause = self.axs_control[0].inset_axes([0,0.5,1,0.5]) #[x0, y0, width, height]
+        #self.buttons['pause'] = Button(ax_pause, 'Pause')
+        #self.buttons['pause'].on_clicked(self.toggle_pause)
         
         ax_noise = self.axs_control[0].inset_axes([0.4,0,0.5,0.45]) #[x0, y0, width, height]
         self.buttons['noise_slider'] = Slider(ax_noise, 'Noise', 0, 1, valinit=self.noise, valstep=0.1)
@@ -509,7 +661,7 @@ class BasalGangliaLoop:
 
     def set_child_loop(self, child_loop):
         self.child_loop = child_loop
-        self.child_loop.buttons['pause'].ax.set_visible(False)
+        #self.child_loop.buttons['pause'].ax.set_visible(False)
 
     def update_stimulus_activation(self, cell, stimulus, index, active=True):
         i = 0
@@ -565,7 +717,7 @@ class BasalGangliaLoop:
         else:
             rates_rel = [[r / max_rate for r in rate] for rate in rates]
             return rates, rates_rel
-
+    '''
     def toggle_pause(self, event=None):
         self.paused = not self.paused
         self.buttons['pause'].label.set_text('Continue' if self.paused else 'Pause')
@@ -574,7 +726,7 @@ class BasalGangliaLoop:
         else:
             self.buttons['pause'].color = 'c'
         self.fig.canvas.draw_idle()
-
+    '''
     def update_stim(self, val):
         self.noise = val
         for ct in self.cell_types:
@@ -605,17 +757,18 @@ class BasalGangliaLoop:
         selected_goal_index = self.goals.index(self.selected_goal)
 
         for idx, _ in enumerate(self.goals):
-            h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=idx, active=False)) # start all cortical input stimuli
-        h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=True)) # start particular cortical input stimulus
-        h.cvode.event(current_time + self.plot_interval/2, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=False)) # stop particular cortical input stimulus
+            h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=idx, active=False)) # stop all cortical input stimuli
+        
+        if set(self.selected_goal) != {'0'}: # Only stimulate cortex if a goal is set
+            h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=True)) # start particular cortical input stimulus
+            h.cvode.event(current_time + self.plot_interval/2, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=False)) # stop particular cortical input stimulus
 
     def analyze_thalamus_activation_time(self, current_time):
         self.activation_times.append(int(current_time))
 
         max_rates = {}
-
-        window_start = np.array(self.t_vec)[-1] - self.plot_interval / 2
-        window_end = np.array(self.t_vec)[-1]
+        window_start = np.array(self.t_vec.to_python())[-1] - self.plot_interval / 2
+        window_end = np.array(self.t_vec.to_python())[-1]
         window_duration_sec = (window_end - window_start) / 1000.0  # Convert ms to seconds
 
         for action_id, action in enumerate(self.actions):
@@ -644,14 +797,14 @@ class BasalGangliaLoop:
   
     def select_action(self, current_time):
         active_actions = [(i, activations[-1]) for i, activations in self.activation_over_time.items() if activations[-1] > 0]
-        if active_actions:
+        if active_actions and self.selected_goal and set(self.selected_goal) != {'0'}:
             # Pick the action with the maximum last activation value
             self.selected_action = max(active_actions, key=lambda x: x[1])
         else:
             # No active actions found
             self.selected_action = []
 
-        if self.child_loop and self.selected_action:
+        if self.child_loop and self.selected_action and set(self.selected_goal) != {'0'}:
             # Set input of child loop based on output of current loop
             for id, state in enumerate(list(map(int, self.selected_action[0]))):
                 self.child_loop.buttons[f'cor_dur_slider{id}'].set_val(0 if state == 0 else self.selected_action[1])
@@ -699,7 +852,7 @@ class BasalGangliaLoop:
                     for ct in self.weight_cell_types:
                         for msn_id in range(self.cell_types_numbers[ct][1]):
                             delta_w = 0
-                            if goal == self.selected_goal and action == self.selected_action[0]:
+                            if goal == self.selected_goal and self.selected_action and action == self.selected_action[0]:
                                 delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[goal][-1] # rel_rate = 1 corresponds to tonic baseline activity
                             if ct == 'MSNd':
                                 # dopamine facilitates active MSNd and inhibits less active MSNd
@@ -967,65 +1120,14 @@ joint_actuator_mapping = {"100": "100",
 joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
 
 
+
+
+
+#--- Basal Ganglia ---------------------------------------------------------------------------------------------------------------------------------------------------#
 bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=7)
 bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=7)
-bg = [bg_m, bg_p]
-bg_ = BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
+#bg = [bg_m, bg_p]
+bg = BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
-#--- Simulation ---------------------------------------------------------------------------------------------------------------------------------------------------#
-h.dt = 1
-h.finitialize()
-state = 0  
 
-try:
-    while True:
-        #any_paused = any(loop.paused for loop in bg)
-        #all_inputs_zero = all(all(val == 0 for val in loop.cortical_input_dur_rel) for loop in bg)
-        #if any_paused or all_inputs_zero:
-        if bg[-1].paused or all(val == 0 for val in bg[-1].cortical_input_dur_rel): # parent loop controls simulation
-            # Simulation paused
-            time.sleep(0.1)
-            for loop in bg:
-                loop.fig.canvas.draw_idle()   
-                loop.fig.canvas.flush_events()
-            continue
 
-        # Run simulation for half of the interval
-        h.continuerun(h.t + bg_m.plot_interval // 2)
-
-        # --- Action selection and reward update ---#
-        if state == 0: # executed after half time of plot_interval
-            for loop in bg:
-                loop.analyze_thalamus_activation_time(current_time=h.t)
-                loop.select_action(current_time=h.t)
-                loop.determine_reward(current_time=h.t)
-
-        # --- Weight and plot update ---#  
-        else: # executed after full time of plot_interval
-            for loop in bg:
-                loop.cortical_input_stimuli(current_time=h.t)
-                loop.update_weights(current_time=h.t)
-                loop.update_plots(current_time=h.t)
-
-                loop.fig.canvas.draw_idle()   
-                loop.fig.canvas.flush_events() 
-            plt.pause(0.001)
-
-        state = 1 - state # toggle state
-
-        # Pause simulation
-        for loop in bg:
-            if int(h.t) % loop.simulation_stop_time == 0:
-                loop.toggle_pause()
-    
-except KeyboardInterrupt:
-        print("\nCtrl-C pressed. Storing data...")
-        plt.close()
-
-finally:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    path = f"Data\{timestamp}"
-
-    for loop in bg:
-        loop.save_data(path) # Excel file
-        loop.fig.savefig(f"{path}_{loop.name}.png", dpi=300, bbox_inches='tight') # GUI Screenshot
