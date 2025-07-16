@@ -331,7 +331,6 @@ class BasalGangliaLoop:
             ('GPi', 'Thal', 'GPi_to_Thal', -85, 1.0,   10, 1)    # inhibitory
         ]
         self._is_updating_programmatically = False
-        #self.paused = False
         self.noise = 0
         self.n_spikes_SNc_burst = 5
         self.learning_rate = 0.1
@@ -643,12 +642,7 @@ class BasalGangliaLoop:
         self.axs_control[-1].legend(loc='upper left')
 
     def _init_control_panel(self):
-        #--- Upper control panel ---#
-        #print(f"{self.name} width={self.axs_control[0].get_position().width}, height={self.axs_control[0].get_position().height}")
-        #ax_pause = self.axs_control[0].inset_axes([0,0.5,1,0.5]) #[x0, y0, width, height]
-        #self.buttons['pause'] = Button(ax_pause, 'Pause')
-        #self.buttons['pause'].on_clicked(self.toggle_pause)
-        
+        #--- Upper control panel ---#        
         ax_noise = self.axs_control[0].inset_axes([0.4,0,0.5,0.45]) #[x0, y0, width, height]
         self.buttons['noise_slider'] = Slider(ax_noise, 'Noise', 0, 1, valinit=self.noise, valstep=0.1)
         self.buttons['noise_slider'].on_changed(self.update_stim)
@@ -661,7 +655,6 @@ class BasalGangliaLoop:
 
     def set_child_loop(self, child_loop):
         self.child_loop = child_loop
-        #self.child_loop.buttons['pause'].ax.set_visible(False)
 
     def update_stimulus_activation(self, cell, stimulus, index, active=True):
         i = 0
@@ -717,16 +710,7 @@ class BasalGangliaLoop:
         else:
             rates_rel = [[r / max_rate for r in rate] for rate in rates]
             return rates, rates_rel
-    '''
-    def toggle_pause(self, event=None):
-        self.paused = not self.paused
-        self.buttons['pause'].label.set_text('Continue' if self.paused else 'Pause')
-        if not self.paused:
-            self.buttons['pause'].color = '0.85'
-        else:
-            self.buttons['pause'].color = 'c'
-        self.fig.canvas.draw_idle()
-    '''
+
     def update_stim(self, val):
         self.noise = val
         for ct in self.cell_types:
