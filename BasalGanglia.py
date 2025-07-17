@@ -5,6 +5,7 @@ from matplotlib import rcParams
 import matplotlib.gridspec as gridspec
 import numpy as np
 import time
+import random
 from openpyxl import Workbook
 from datetime import datetime
 from itertools import product
@@ -71,7 +72,8 @@ class BasalGanglia:
             self.axs_loops[idx].set_axis_off() 
             ax_loops = self.axs_loops[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
             ax_loops.text(0.5, 0.5, f'{loop.name}', rotation=90, ha='center', va='center', transform=ax_loops.transAxes)
-            self.buttons[f'{loop.name}'] = TextBox(ax_loops, label='', textalignment='center')
+            label_text = '\n'.join(loop.name.split())
+            self.buttons[f'{label_text}'] = TextBox(ax_loops, label='', textalignment='center')
 
             row = len(self.loops) - idx
             if idx == 0:
@@ -90,7 +92,8 @@ class BasalGanglia:
                 for i, name in enumerate(loop.actions_names):
                     self.axs_selections[idx][i].set_axis_off() 
                     ax_selections = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
-                    self.buttons[f'{name}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{name}', color='None', textalignment='center')
+                    label_text = '\n'.join(name.split())
+                    self.buttons[f'{name}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
                 
                 # Init probabilities
                 self.axs_probabilities[idx] = self.fig.add_subplot(self.gs_probabilities[row])
@@ -119,7 +122,8 @@ class BasalGanglia:
             for i, name in enumerate(loop.goals_names):
                     self.axs_selections[idx+1][i].set_axis_off() 
                     ax_selections = self.axs_selections[idx+1][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
-                    self.buttons[f'{name}'] = Button(ax_selections, label=f'{name}', color='None', hovercolor='lightgray')
+                    label_text = '\n'.join(name.split())
+                    self.buttons[f'{name}'] = Button(ax_selections, label=f'{label_text}', color='None', hovercolor='lightgray')
                     self.buttons[f'{name}'].on_clicked(lambda event, loop=loop, i=i: self.update_goals(loop, i))
             
             if idx == 1:
@@ -217,6 +221,8 @@ class BasalGanglia:
                     self.update_selections()
                     continue
                 
+                start_time = time.time()
+
                 # Update selections in basal ganglia overview plot
                 self.update_selections()
 
@@ -241,12 +247,17 @@ class BasalGanglia:
                         loop.fig.canvas.flush_events() 
                     plt.pause(0.001)
 
-                state = 1 - state # toggle state
-
+                
                 # Pause simulation
                 for loop in self.loops:
                     if int(h.t) % loop.simulation_stop_time == 0:
                         self.toggle_pause()
+
+                end_time = time.time()
+                duration = end_time - start_time
+                print(f"Loop {state} took {duration:.6f} seconds")
+
+                state = 1 - state # toggle state
             
         except KeyboardInterrupt:
                 print("\nCtrl-C pressed. Storing data...")
@@ -268,10 +279,10 @@ class BasalGangliaLoop:
     def __init__(self, name, input, output, binary_input=False, single_goal=False, goal_action_table=None, actions_to_plot=None):
         self.name = name
         self.goals_names = input
-        self.goals = [''.join(bits) for bits in product('01', repeat=len(input))] # binary combination of all inputs
+        self.goals = [''.join(bits) for bits in product('10', repeat=len(input))] # binary combination of all inputs
         self.selected_goal = None
         self.actions_names = output
-        self.actions = [''.join(bits) for bits in product('01', repeat=len(output)) if any(bit == '1' for bit in bits)] # binary combination of all outputs
+        self.actions = [''.join(bits) for bits in product('10', repeat=len(output)) if any(bit == '1' for bit in bits)] # binary combination of all outputs
         self.selected_action = None
         if actions_to_plot is not None:
             self.actions_to_plot = len(self.actions) if len(self.actions) <= actions_to_plot else actions_to_plot
@@ -308,7 +319,7 @@ class BasalGangliaLoop:
             'GPi'       : 0.5,
             'Thal'      : 0.5,
             'SNc_burst' : 0.5,
-            'Cor'       : 0.5
+            'Cor'       : 0.35
         }
 
         self.stims = {}
@@ -317,8 +328,8 @@ class BasalGangliaLoop:
 
         # Define connection specifications
         self.connection_specs_cor = [# pre_group, post_group, label, e_rev, weight, tau, delay
-            ('Cor', 'MSNd', 'Cor_to_MSNd',   0, 0.15,   5, 1),   # excitatory
-            ('Cor', 'MSNi', 'Cor_to_MSNi',   0, 0.15,   5, 1)    # excitatory
+            ('Cor', 'MSNd', 'Cor_to_MSNd',   0, 0.25,   5, 1),   # excitatory
+            ('Cor', 'MSNi', 'Cor_to_MSNi',   0, 0.25,   5, 1)    # excitatory
         ]
 
         # Define connection specifications
@@ -583,7 +594,7 @@ class BasalGangliaLoop:
                 rate_line, = self.axs_plot[self.row_spike][i].step([], [], f'C{j}')
                 self.rate_lines[ct].append(rate_line)
             self.axs_plot[self.row_spike][i].plot([], [], color='black', linestyle='dotted', label=f'Spikes')
-            self.axs_plot[self.row_spike][i].plot([], [], color='black', label=f'Relative rate')
+            self.axs_plot[self.row_spike][i].plot([], [], color='black', label=f'Relative\nrate')
 
             self.total_cells = sum(self.cell_types_numbers[ct][1] for ct in self.cell_types)
             
@@ -622,7 +633,7 @@ class BasalGangliaLoop:
             self.axs_plot[self.row_weights][i].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_weights][i].set_ylim(-0.1, 1.1)
             self.axs_plot[self.row_weights][i].xaxis.set_major_formatter(ms_to_s)
-            self.axs_plot[self.row_weights][i].set_xlabel('Simulation time (s)')
+            self.axs_plot[self.row_weights][i].set_xlabel('Simulation\ntime (s)')
         self.axs_plot[self.row_weights][-1].legend(loc='upper right')
 
     def _init_reward_plot(self):
@@ -631,7 +642,7 @@ class BasalGangliaLoop:
         self.reward_lines = []
         self.dopamine_lines = []
 
-        self.expected_reward_lines, = self.axs_control[-1].plot([], [], 'C9', label='Expected reward')
+        self.expected_reward_lines, = self.axs_control[-1].plot([], [], 'C9', label='Expected\nreward')
         self.reward_lines, = self.axs_control[-1].step([], [], 'C8', label='Reward', where='post')
         self.dopamine_lines, = self.axs_control[-1].plot([], [], 'C6', label='Dopamine')
 
@@ -649,7 +660,8 @@ class BasalGangliaLoop:
 
         for i, goal_name in enumerate(self.goals_names):
             ax_cor_dur = self.axs_control[1+i].inset_axes([0,0,0.9,0.45]) #[x0, y0, width, height]
-            ax_cor_dur.set_title(goal_name)
+            label_text = '\n'.join(goal_name.split())
+            ax_cor_dur.set_title(label_text)
             self.buttons[f'cor_dur_slider{i}'] = Slider(ax_cor_dur, '', 0, 1, valinit=self.cortical_input_dur_rel[i], valstep=1 if self.binary_input else 0.2)
             self.buttons[f'cor_dur_slider{i}'].on_changed(lambda val, i=i: self.update_cor_dur(val=val, goal_idx=i))
 
@@ -750,7 +762,7 @@ class BasalGangliaLoop:
     def analyze_thalamus_activation_time(self, current_time):
         self.activation_times.append(int(current_time))
 
-        max_rates = {}
+        rates = {}
         window_start = np.array(self.t_vec.to_python())[-1] - self.plot_interval / 2
         window_end = np.array(self.t_vec.to_python())[-1]
         window_duration_sec = (window_end - window_start) / 1000.0  # Convert ms to seconds
@@ -768,12 +780,15 @@ class BasalGangliaLoop:
             # Compute firing rate: total spikes / (number of cells * window duration)
             num_cells = self.cell_types_numbers['Thal'][1]
             rate = len(spikes_in_window) / (num_cells * window_duration_sec) if window_duration_sec > 0 else 0
-
-            max_rates[action] = rate
+            rates[action] = rate
 
         # Find the action with the highest thalamus firing rate
-        best_action = max(max_rates, key=max_rates.get, default=None)
-        #print(f"{self.name} action = {best_action} max_rate = {max_rates[best_action]}")
+        if rates:
+            max_value = max(rates.values())
+            candidates = [action for action, value in rates.items() if value == max_value]
+            best_action = random.choice(candidates)
+        else:
+            best_action = None
 
         # Store 1 for the best action, 0 for the rest
         for action in self.actions:
@@ -1078,21 +1093,13 @@ def create_goal_action_table(mapping, goals, actions):
 ms_to_s = FuncFormatter(lambda x, _: f'{int(x/1000)}' if x % 1000 == 0 else '')
 
 
-# Basal Ganglia Loops
-#grasp_types_dict = {"Precision pinch": [1, 1, 1, 0, 0, 0],
-#                    "Power grasp":     [1, 1, 1, 1, 1, 1]}
-#joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
-#actuators = ["Thumb oppositor", "Thumb abductor", "Thumb flexor", "Thumb extensor", "Index finger flexor", "Index finger extensor", "Middle finger flexor", "Middle finger extensor", "Ring finger flexor", "Ring finger extensor", "Pinky finger flexor", "Pinky finger extensor"]
-#actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Middle finger flexor", "Ring finger flexor", "Pinky finger flexor"]
-
+#--- Basal Ganglia ---------------------------------------------------------------------------------------------------------------------------------------------------#
 grasp_types = ["Precision pinch", "Power grasp"]
 joints = ["Thumb flexion", "Index finger flexion", "Middle finger flexion"]
 actuators = ["Thumb flexor", "Index finger flexor", "Middle finger flexor"]
 grasp_type_joint_mapping = {"10": "110", # Precision pinch
                             "01": "111"} # Power grasp
 grasp_type_joint_table = create_goal_action_table(mapping=grasp_type_joint_mapping, goals=grasp_types, actions=joints)
-#print(grasp_type_joint_table)
-
 joint_actuator_mapping = {"100": "100", 
                           "010": "010",
                           "001": "001",
@@ -1103,14 +1110,21 @@ joint_actuator_mapping = {"100": "100",
                           }
 joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
 
+#'''
+grasp_types = ["Precision pinch", "Power grasp"]
+joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
+#actuators = ["Thumb oppositor", "Thumb abductor", "Thumb flexor", "Thumb extensor", "Index finger flexor", "Index finger extensor", "Middle finger flexor", "Middle finger extensor", "Ring finger flexor", "Ring finger extensor", "Pinky finger flexor", "Pinky finger extensor"]
+actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Middle finger flexor", "Ring finger flexor", "Pinky finger flexor"]
+grasp_type_joint_mapping = {"10": "111000", # Precision pinch
+                            "01": "111111"} # Power grasp
+grasp_type_joint_table = create_goal_action_table(mapping=grasp_type_joint_mapping, goals=grasp_types, actions=joints)
+joint_actuator_mapping = {}
+joint_actuator_mapping = {''.join(bits): ''.join(bits) for bits in product('10', repeat=len(joints)) if any(bit == '1' for bit in bits)}
+joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
+#'''
 
-
-
-
-#--- Basal Ganglia ---------------------------------------------------------------------------------------------------------------------------------------------------#
-bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=7)
-bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=7)
-#bg = [bg_m, bg_p]
+bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=15)
+bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=15)
 bg = BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
 
