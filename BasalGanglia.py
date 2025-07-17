@@ -31,8 +31,8 @@ class BasalGanglia:
         self.loops = loops
         self.buttons = {}
         self.paused = False
-        self.plot_interval = 1000  # ms
-        self.simulation_stop_time = 100000 # ms
+        self.plot_interval = 100  # ms
+        self.simulation_stop_time = 10000 # ms
 
         self._init_loops()
         self._init_plotting()
@@ -43,7 +43,7 @@ class BasalGanglia:
     def _init_loops(self):
         for idx, loop in enumerate(self.loops):
             loop.plot_interval = self.plot_interval
-            loop.bin_width_firing_rate = self.plot_interval / 10  # ms
+            loop.bin_width_firing_rate = self.plot_interval # ms
             if idx > 0:
                 loop.set_child_loop(self.loops[idx-1])
 
@@ -73,15 +73,22 @@ class BasalGanglia:
         self.buttons['pause'].on_clicked(self.toggle_pause)
 
         for idx, loop in enumerate(self.loops):
+            row = len(self.loops) - idx
+
             # Plot loop name
-            self.axs_loops[idx] = self.fig.add_subplot(self.gs_loops[idx])
+            self.axs_loops[idx] = self.fig.add_subplot(self.gs_loops[self.gs_loops.nrows - 1 - idx ])
             self.axs_loops[idx].set_axis_off() 
             ax_loops = self.axs_loops[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
             ax_loops.text(0.5, 0.5, f'{loop.name}', rotation=90, ha='center', va='center', transform=ax_loops.transAxes)
             label_text = '\n'.join(loop.name.split())
             self.buttons[f'{label_text}'] = TextBox(ax_loops, label='', textalignment='center')
 
-            row = len(self.loops) - idx
+            # Init probabilities
+            self.axs_probabilities[idx] = self.fig.add_subplot(self.gs_probabilities[self.gs_probabilities.nrows - 2 - idx])
+            self.axs_probabilities[idx].set_axis_off()
+            self.axs_probabilities[idx].set_xlim(0, 1)
+            self.axs_probabilities[idx].set_ylim(0, 1)
+            
             if idx == 0:
                 # Plot output group name
                 self.axs_names[idx] = self.fig.add_subplot(self.gs_names[row])
@@ -100,12 +107,7 @@ class BasalGanglia:
                     ax_selections = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
                     label_text = '\n'.join(name.split())
                     self.buttons[f'{name}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
-                
-                # Init probabilities
-                self.axs_probabilities[idx] = self.fig.add_subplot(self.gs_probabilities[row])
-                self.axs_probabilities[idx].set_axis_off()
-                self.axs_probabilities[idx].set_xlim(0, 1)
-                self.axs_probabilities[idx].set_ylim(0, 1)
+
                 # Plot a horizontal bar with width=prob
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
                     x=0.5, width=0.8, height=0, color='tab:cyan')[0]  # Get BarContainer object
@@ -131,14 +133,9 @@ class BasalGanglia:
                     label_text = '\n'.join(name.split())
                     self.buttons[f'{name}'] = Button(ax_selections, label=f'{label_text}', color='None', hovercolor='lightgray')
                     self.buttons[f'{name}'].on_clicked(lambda event, loop=loop, i=i: self.update_goals(loop, i))
+                    self.buttons[f'probability_{name}'] = ax_selections.text(0.5, 0.03, '', ha='center')
             
             if idx == 1:
-                # Init probabilities
-                self.axs_probabilities[idx] = self.fig.add_subplot(self.gs_probabilities[row])
-                self.axs_probabilities[idx].set_axis_off() 
-                self.axs_probabilities[idx].set_xlim(0, 1)
-                self.axs_probabilities[idx].set_ylim(0, 1)
-                # Plot a horizontal bar with width=prob
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
                     x=0.5, width=0.8, height=0, color='tab:cyan')[0]  # Get BarContainer object
                 ax_probabilities = self.axs_probabilities[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
@@ -158,7 +155,6 @@ class BasalGanglia:
         else:
             self.buttons['pause'].ax.set_facecolor('r')
             self.buttons['pause'].color = 'r'
-        #self.fig.canvas.draw_idle()
 
     def update_selections(self, frame=None):
         for idx, loop in enumerate(self.loops):
@@ -175,14 +171,16 @@ class BasalGanglia:
                         reward = loop.reward_over_time[loop.selected_goal][-1]
                         self.highlight_textbox(name, selected, reward)
             for i, name in enumerate(loop.goals_names):
-                    if loop.selected_goal:
-                        char = loop.selected_goal[i]
-                        selected = char == '1'
-                        reward = None
-                        if idx < len(self.loops) - 1:
-                            if self.loops[idx+1].selected_goal:
-                                reward = self.loops[idx+1].reward_over_time[self.loops[idx+1].selected_goal][-1]
-                        self.highlight_textbox(name, selected, reward)
+                if loop.selected_goal:
+                    char = loop.selected_goal[i]
+                    selected = char == '1'
+                    reward = None
+                    if idx < len(self.loops) - 1:
+                        if self.loops[idx+1].selected_goal:
+                            reward = self.loops[idx+1].reward_over_time[self.loops[idx+1].selected_goal][-1]
+                    self.highlight_textbox(name, selected, reward)
+                    
+                    if selected: self.update_goal_probability(name, loop, probability=loop.expected_reward_over_time[loop.selected_goal][-1])
     
     def highlight_textbox(self, name, selected, reward):
         if selected:
@@ -212,6 +210,29 @@ class BasalGanglia:
         else:
             self.buttons[f'probability_{loop_id}'].set_text(f'')
             self.buttons[f'probability_bar_{loop_id}'].set_height(0)
+    
+    def update_goal_probability(self, name, loop, probability):
+        if loop.single_goal:
+            if self.buttons.get(f'probability_{name}'):
+                self.buttons[f'probability_{name}'].set_text(f'{probability:.1%}')
+        else:
+            goal_idx = loop.goals_names.index(name)
+
+            total = 0
+            count = 0
+            for key in loop.expected_reward_over_time:
+                if key[goal_idx] == '1':
+                    try:
+                        total += loop.expected_reward_over_time[key][-1]
+                        count += 1
+                    except IndexError:
+                        pass  # Skip if data is missing
+
+            if count > 0:
+                avg_prob = total / count
+                if self.buttons.get(f'probability_{name}'):
+                    self.buttons[f'probability_{name}'].set_text(f'{avg_prob:.1%}')
+
 
     def run_simulation(self):
         state = 0  
@@ -236,35 +257,35 @@ class BasalGanglia:
 
                 time_step = time.time()
                 # Run simulation for half of the interval
-                h.continuerun(h.t + self.plot_interval // 2)
+                h.continuerun(h.t + self.plot_interval)# // 2)
                 #print(f"{(time.time() - time_step):.6f} s continuerun")
 
                 # --- Action selection and reward update ---#
-                if state == 0: # executed after half time of plot_interval
-                    for loop in self.loops:
-                        time_step = time.time()
-                        loop.analyze_thalamus_activation_time(current_time=h.t)
-                        #print(f"{(time.time() - time_step):.6f} s analyze_thalamus_activation_time")
-                        time_step = time.time()
-                        loop.select_action(current_time=h.t)
-                        #print(f"{(time.time() - time_step):.6f} s select_action")
-                        time_step = time.time()
-                        loop.determine_reward(current_time=h.t)
-                        #print(f"{(time.time() - time_step):.6f} s determine_reward")
+                #if state == 0: # executed after half time of plot_interval
+                for loop in self.loops:
+                    time_step = time.time()
+                    loop.analyze_thalamus_activation_time(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s analyze_thalamus_activation_time")
+                    time_step = time.time()
+                    loop.select_action(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s select_action")
+                    time_step = time.time()
+                    loop.determine_reward(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s determine_reward")
 
                 # --- Weight and plot update ---#  
-                else: # executed after full time of plot_interval
-                    for loop in self.loops:
-                        time_step = time.time()
-                        loop.cortical_input_stimuli(current_time=h.t)
-                        #print(f"{(time.time() - time_step):.6f} s cortical_input_stimuli")
-                        time_step = time.time()
-                        loop.update_weights(current_time=h.t)
-                        #print(f"{(time.time() - time_step):.6f} s update_weights")
-                        time_step = time.time()
-                        loop.update_plots(current_time=h.t)
-                        #print(f"{(time.time() - time_step):.6f} s update_plots")
-                    plt.pause(0.001)
+                #else: # executed after full time of plot_interval
+                for loop in self.loops:
+                    time_step = time.time()
+                    loop.cortical_input_stimuli(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s cortical_input_stimuli")
+                    time_step = time.time()
+                    loop.update_weights(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s update_weights")
+                    time_step = time.time()
+                    loop.update_plots(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s update_plots")
+                plt.pause(0.001)
 
                 # Pause simulation
                 if int(h.t) % self.simulation_stop_time == 0:
@@ -519,9 +540,6 @@ class BasalGangliaLoop:
         # Reward initialization
         self.reward_times.append(0)
         for goal in self.goals:
-            #for goal_id, _ in enumerate(self.goals):
-            #    input_key = f"{goal_id}-{action}"
-            #    self.expected_reward_over_time[input_key] = [self.expected_reward_value]
             self.expected_reward_over_time[goal] = [self.expected_reward_value]
             self.reward_over_time[goal] = [0]
             self.dopamine_over_time[goal] = [0]
@@ -773,13 +791,13 @@ class BasalGangliaLoop:
         
         if set(self.selected_goal) != {'0'}: # Only stimulate cortex if a goal is set
             h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=True)) # start particular cortical input stimulus
-            h.cvode.event(current_time + self.plot_interval/2, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=False)) # stop particular cortical input stimulus
+            h.cvode.event(current_time + self.plot_interval, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=False)) # stop particular cortical input stimulus
 
     def analyze_thalamus_activation_time(self, current_time):
         self.activation_times.append(int(current_time))
 
         rates = {}
-        window_start = np.array(self.t_vec.to_python())[-1] - self.plot_interval / 2
+        window_start = np.array(self.t_vec.to_python())[-1] - self.plot_interval
         window_end = np.array(self.t_vec.to_python())[-1]
         window_duration_sec = (window_end - window_start) / 1000.0  # Convert ms to seconds
 
@@ -840,14 +858,19 @@ class BasalGangliaLoop:
                 
             current_expected_reward = self.expected_reward_over_time[goal][-1]
             self.dopamine_over_time[goal].append(round(self.reward_over_time[goal][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
+            '''
             for action in self.actions:
                 if self.reward_over_time[goal][-1] - current_expected_reward > 0:
                     self.SNc_burst(event=None, action=action)
                 elif self.reward_over_time[goal][-1] - current_expected_reward < 0:
                     self.SNc_dip(event=None, action=action)
-
-            # Update expected reward based on actual reward
-            self.expected_reward_over_time[goal].append(round(current_expected_reward + 0.1 * (self.reward_over_time[goal][-1] - current_expected_reward), 4))
+            '''
+            
+            if goal == self.selected_goal:
+                #For selected goal update expected reward based on actual reward
+                self.expected_reward_over_time[goal].append(round(current_expected_reward + 0.1 * (self.reward_over_time[goal][-1] - current_expected_reward), 4))
+            else:
+                self.expected_reward_over_time[goal].append(self.expected_reward_over_time[goal][-1])
 
     def OLD_update_weights(self, current_time):
         # Analyze firing rates
@@ -906,7 +929,7 @@ class BasalGangliaLoop:
                         elif ct == 'MSNi':
                             delta_w = -delta_w
                         key = (ct, action_id, msn_id, goal_id, cor_id)
-                        new_weight = max(0, self.weights_over_time[key][-1] + delta_w)
+                        new_weight = min(1, max(0, self.weights_over_time[key][-1] + delta_w))
                         self.weights_over_time[key].append(round(new_weight, 4))
                         idx = self.cor_nc_index_map[f'Cor_to_{ct}'][key]
                         self.ncs[f'Cor_to_{ct}'][idx].weight[0] = new_weight
@@ -945,8 +968,8 @@ class BasalGangliaLoop:
                     self.raster_lines[ct][action_id][k].set_data(spikes, y_vals)
                     all_spikes.extend(spikes)
                 # Rate lines
-                if len(all_spikes) > 0:
-                    bins = np.arange(0, np.array(self.t_vec)[-1], self.bin_width_firing_rate)
+                if all_spikes:
+                    bins = np.arange(0, np.array(self.t_vec)[-1] + self.bin_width_firing_rate, self.bin_width_firing_rate)
                     hist, edges = np.histogram(all_spikes, bins=bins)
                     if np.any(hist):  # Only proceed if there's at least one spike
                         rate = hist / (self.cell_types_numbers[ct][1] * self.bin_width_firing_rate / 1000.0)
@@ -961,7 +984,7 @@ class BasalGangliaLoop:
                         rate_scaled = rate_scaled * (self.cell_types_numbers[ct][1] - 1) + y_base - self.cell_types_numbers[ct][1] + 1
                         self.rate_lines[ct][action_id].set_data(bin_ends, rate_scaled)
                     else:
-                        self.rate_lines[ct][action_id].set_data([], [])
+                        self.rate_lines[ct][action_id].set_data([], [])          
                 y_base -= self.cell_types_numbers[ct][1]
             self.axs_plot[self.row_spike][action_id].set_xlim(max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
 
@@ -977,9 +1000,14 @@ class BasalGangliaLoop:
             self.axs_plot[self.row_weights][action_id].set_ylim(-0.1, max(1.1, ymax*1.1))
 
         # Reward plot
-        self.expected_reward_lines.set_data(self.reward_times, self.expected_reward_over_time[self.selected_goal])
-        self.reward_lines.set_data(self.reward_times, self.reward_over_time[self.selected_goal])
-        self.dopamine_lines.set_data(self.reward_times, self.dopamine_over_time[self.selected_goal])
+        if set(self.selected_goal) != {'0'}:
+            self.expected_reward_lines.set_data(self.reward_times, self.expected_reward_over_time[self.selected_goal])
+            self.reward_lines.set_data(self.reward_times, self.reward_over_time[self.selected_goal])
+            self.dopamine_lines.set_data(self.reward_times, self.dopamine_over_time[self.selected_goal])
+        else:
+            self.expected_reward_lines.set_data(self.reward_times, [0]*len(self.reward_times))
+            self.reward_lines.set_data(self.reward_times, [0]*len(self.reward_times))
+            self.dopamine_lines.set_data(self.reward_times, [0]*len(self.reward_times))
         self.axs_control[-1].set_xlim(0, max(self.plot_interval, int(current_time)))
     
     def save_data(self, path):
@@ -1135,7 +1163,7 @@ def create_goal_action_table(mapping, goals, actions):
     return goal_action_table
 
 # Formatter function: 1000 ms → 1 s
-ms_to_s = FuncFormatter(lambda x, _: f'{int(x/1000)}' if x % 1000 == 0 else '')
+ms_to_s = FuncFormatter(lambda x, _: f'{x/1000}' if x % 100 == 0 else '')
 
 
 #--- Basal Ganglia ---------------------------------------------------------------------------------------------------------------------------------------------------#
