@@ -1,4 +1,4 @@
-from neuron import h, coreneuron#, gui
+from neuron import h#, coreneuron#, gui
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, Slider, TextBox
 from matplotlib import rcParams
@@ -19,7 +19,7 @@ from matplotlib.animation import FuncAnimation
 
 
 h.load_file("stdrun.hoc")
-coreneuron.enable = True
+#coreneuron.enable = True
 
 output = False # Set to True (print values in the terminal) or False (no printing)
 
@@ -31,15 +31,19 @@ class BasalGanglia:
         self.loops = loops
         self.buttons = {}
         self.paused = False
+        self.plot_interval = 1000  # ms
+        self.simulation_stop_time = 100000 # ms
 
-        self._init_child_loops()
+        self._init_loops()
         self._init_plotting()
         self._init_simulation()
 
         self.run_simulation()
     
-    def _init_child_loops(self):
+    def _init_loops(self):
         for idx, loop in enumerate(self.loops):
+            loop.plot_interval = self.plot_interval
+            loop.bin_width_firing_rate = self.plot_interval / 10  # ms
             if idx > 0:
                 loop.set_child_loop(self.loops[idx-1])
 
@@ -142,7 +146,7 @@ class BasalGanglia:
                 self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='', ha='center', va='center', transform=ax_probabilities.transAxes)
             
     def _init_simulation(self):
-        h.dt = 2 
+        h.dt = 1
         h.finitialize()
 
     def toggle_pause(self, event=None):
@@ -232,7 +236,7 @@ class BasalGanglia:
 
                 time_step = time.time()
                 # Run simulation for half of the interval
-                h.continuerun(h.t + self.loops[0].plot_interval // 2)
+                h.continuerun(h.t + self.plot_interval // 2)
                 #print(f"{(time.time() - time_step):.6f} s continuerun")
 
                 # --- Action selection and reward update ---#
@@ -263,13 +267,12 @@ class BasalGanglia:
                     plt.pause(0.001)
 
                 # Pause simulation
-                for loop in self.loops:
-                    if int(h.t) % loop.simulation_stop_time == 0:
-                        self.toggle_pause()
+                if int(h.t) % self.simulation_stop_time == 0:
+                    self.toggle_pause()
 
                 end_time = time.time()
                 duration = end_time - start_time
-                print(f"Loop {state} took {duration:.6f} s")
+                #print(f"Loop {state} took {duration:.6f} s")
 
                 state = 1 - state # toggle state
             
@@ -333,7 +336,7 @@ class BasalGangliaLoop:
             'GPi'       : 0.5,
             'Thal'      : 0.5,
             'SNc_burst' : 0.5,
-            'Cor'       : 0.35
+            'Cor'       : 0.4
         }
 
         self.stims = {}
@@ -379,9 +382,8 @@ class BasalGangliaLoop:
         self.cor_nc_index_map = {} 
         self.apc_refs = []
 
-        self.plot_interval = 1000  # ms
-        self.bin_width_firing_rate = self.plot_interval / 10  # ms
-        self.simulation_stop_time = 100000 # ms
+        self.plot_interval = None
+        self.bin_width_firing_rate = None
 
         self.buttons = {}
         self.rates = {}
@@ -1036,8 +1038,7 @@ class BasalGangliaLoop:
             "n_spikes_SNc_burst": self.n_spikes_SNc_burst,
             "learning_rate": self.learning_rate,
             "expected_reward_value": self.expected_reward_value,
-            "noise": self.noise,
-            "simulation_stop_time": self.simulation_stop_time
+            "noise": self.noise
 
         }
         row = write_dict("Scalars", scalars, row)
@@ -1180,8 +1181,8 @@ joint_actuator_mapping = {''.join(bits): ''.join(bits) for bits in product('10',
 joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
 '''
 
-bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=15)
-bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=15)
+bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=7)
+bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=7)
 bg = BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
 
