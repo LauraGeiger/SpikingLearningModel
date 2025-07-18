@@ -21,8 +21,6 @@ from matplotlib.animation import FuncAnimation
 h.load_file("stdrun.hoc")
 #coreneuron.enable = True
 
-output = False # Set to True (print values in the terminal) or False (no printing)
-
 #--- BasalGanglia ------------------------------------------------------------------------------------------------------------------------------------------------#
 
 class BasalGanglia:
@@ -33,6 +31,7 @@ class BasalGanglia:
         self.paused = False
         self.plot_interval = 100  # ms
         self.simulation_stop_time = 10000 # ms
+        self.iteration = 0
 
         self._init_loops()
         self._init_plotting()
@@ -52,7 +51,7 @@ class BasalGanglia:
         self.fig = plt.figure(figsize=(13, 8))
         self.fig.canvas.manager.set_window_title('BasalGangliaOverview')
         self.gs = gridspec.GridSpec(2, 1, figure=self.fig, height_ratios=[1,10])  
-        self.gs_control = self.gs[0].subgridspec(1, 4)
+        self.gs_control = self.gs[0].subgridspec(1, 2, width_ratios=[1,4])
         self.gs_plot = self.gs[1].subgridspec(1, 4, width_ratios=[1,1,10,1])     
         self.gs_loops = self.gs_plot[0].subgridspec(len(self.loops), 1)
         self.gs_names = self.gs_plot[1].subgridspec(len(self.loops) + 1, 1)
@@ -71,6 +70,14 @@ class BasalGanglia:
         ax_pause = self.axs_control[0].inset_axes([0,0,1,1]) #[x0, y0, width, height]
         self.buttons['pause'] = Button(ax_pause, 'Pause')
         self.buttons['pause'].on_clicked(self.toggle_pause)
+
+        # Reward plot
+        self.ax_reward = self.fig.add_subplot(self.gs_control[1])
+        self.ax_reward.set_xlabel('Iteration')
+        self.ax_reward.set_ylabel('Reward')
+        self.ax_reward.set_xlim(0, 10)  # initial limits, will expand dynamically
+        self.ax_reward.set_ylim(-0.1, 1.1)
+        self.reward_lines = {}  
 
         for idx, loop in enumerate(self.loops):
             row = len(self.loops) - idx
@@ -120,7 +127,7 @@ class BasalGanglia:
             self.axs_names[idx+1].set_axis_off() 
             ax_names = self.axs_names[idx+1].inset_axes([0,0,1,1]) #[x0, y0, width, height]
             ax_names.set_axis_off()
-            input_group = 'Joints' if idx == 0 else 'Grasp type'
+            input_group = 'Joints' if idx == 0 else 'Grasp\ntype'
             ax_names.text(0.5, 0.5, s=input_group, ha='center', va='center', transform=ax_names.transAxes)
 
             # Plot inputs of loop  
@@ -142,6 +149,11 @@ class BasalGanglia:
                 ax_probabilities.set_axis_off()
                 self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='', ha='center', va='center', transform=ax_probabilities.transAxes)
             
+            # Initialize reward lines
+            line, = self.ax_reward.step([], [], label=loop.name, where='post')
+            self.reward_lines[loop.name] = {'line': line, 'xdata': [], 'ydata': []}
+        self.ax_reward.legend(loc='upper left')
+
     def _init_simulation(self):
         h.dt = 1
         h.finitialize()
@@ -157,9 +169,9 @@ class BasalGanglia:
             self.buttons['pause'].color = 'r'
 
     def update_selections(self, frame=None):
+        
         for idx, loop in enumerate(self.loops):
             if loop.selected_goal:
-                
                 visibility = False if set(loop.selected_goal) == {'0'} else True
                 self.update_probability(loop_id=idx, probability=loop.expected_reward_over_time[loop.selected_goal][-1], visibility=visibility)
 
@@ -181,6 +193,22 @@ class BasalGanglia:
                     self.highlight_textbox(name, selected, reward)
                     
                     if selected: self.update_goal_probability(name, loop, probability=loop.expected_reward_over_time[loop.selected_goal][-1])
+            
+            # Get reward for currently selected goal
+            if loop.selected_goal:
+                current_reward = loop.reward_over_time[loop.selected_goal][-1]
+            else:
+                current_reward = 0
+
+            rl = self.reward_lines[loop.name]
+            rl['xdata'].append(self.iteration)
+            rl['ydata'].append(current_reward)
+            rl['line'].set_data(rl['xdata'], rl['ydata'])
+        # Update axes limits dynamically
+        max_iter = max(rl['xdata'][-1] for rl in self.reward_lines.values() if rl['xdata'])
+        self.ax_reward.set_xlim(0, max(10, max_iter + 1))
+
+        self.iteration += 1
     
     def highlight_textbox(self, name, selected, reward):
         if selected:
@@ -235,17 +263,15 @@ class BasalGanglia:
 
 
     def run_simulation(self):
-        state = 0  
-
         try:
             while True:
                 if self.paused or all(all(val == 0 for val in loop.cortical_input_dur_rel) for loop in self.loops): 
                     # Simulation paused
                     time.sleep(0.1)
+
                     for loop in self.loops:
                         loop.fig.canvas.draw_idle()   
                         loop.fig.canvas.flush_events()
-                    self.update_selections()
                     continue
                 
                 start_time = time.time()
@@ -255,14 +281,17 @@ class BasalGanglia:
                 self.update_selections()
                 if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_selections")
 
+                for loop in self.loops:
+                    print(f"{loop.name} selected_goal = {loop.selected_goal}")
+                    if loop.selected_goal: loop.cortical_input_stimuli(current_time=h.t)
+                    
+                
+                # Run simulation
                 time_step = time.time()
-                # Run simulation for half of the interval
-                h.continuerun(h.t + self.plot_interval)# // 2)
+                h.continuerun(h.t + self.plot_interval)
                 if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
 
-                # --- Action selection and reward update ---#
-                #if state == 0: # executed after half time of plot_interval
-                
+                # --- Action selection and reward update ---#                
                 start_time_first_part = time.time()
                 for loop in self.loops:
                     time_step = time.time()
@@ -276,13 +305,10 @@ class BasalGanglia:
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s determine_reward {loop.name}")
                 duration = time.time() - start_time_first_part
                 print(f"{duration:.6f} s first part")
-                # --- Weight and plot update ---#  
-                #else: # executed after full time of plot_interval
+
+                # --- Weight and plot update ---# 
                 start_time_second_part = time.time()
                 for loop in self.loops:
-                    time_step = time.time()
-                    loop.cortical_input_stimuli(current_time=h.t)
-                    if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s cortical_input_stimuli {loop.name}")
                     time_step = time.time()
                     loop.update_weights(current_time=h.t)
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_weights {loop.name}")
@@ -298,8 +324,6 @@ class BasalGanglia:
 
                 duration = time.time() - start_time
                 print(f"Loop took {duration:.6f} s")
-
-                #state = 1 - state # toggle state
             
         except KeyboardInterrupt:
                 print("\nCtrl-C pressed. Storing data...")
@@ -917,12 +941,13 @@ class BasalGangliaLoop:
 
         # Update plots
         for plot_id, action in enumerate(actions_to_plot_now):
+            action_id = self.actions.index(action)
             # Membrane potential plot
             for ct in self.cell_types:
                 if ct == 'Cor':
                     voltages = np.array([(self.recordings[ct][selected_goal_index][j]) for j in range(self.cell_types_numbers[ct][1])])
                 else:
-                    voltages = np.array([(self.recordings[ct][plot_id][j]) for j in range(self.cell_types_numbers[ct][1])])
+                    voltages = np.array([(self.recordings[ct][action_id][j]) for j in range(self.cell_types_numbers[ct][1])])
                 avg_voltage = np.mean(voltages, axis=0)
                 self.mem_lines[ct][plot_id].set_data(np.array(self.t_vec), avg_voltage)
                 new_xlim = (max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
@@ -937,7 +962,7 @@ class BasalGangliaLoop:
                 if ct == 'Cor':
                     spike_block = self.spike_times[ct][selected_goal_index]
                 else:
-                    spike_block = self.spike_times[ct][plot_id]
+                    spike_block = self.spike_times[ct][action_id]
                     
                 for k in range(self.cell_types_numbers[ct][1]):
                     y_val = y_base - k
@@ -972,7 +997,7 @@ class BasalGangliaLoop:
             for ct in self.weight_cell_types:
                 for msn_id in range(self.cell_types_numbers[ct][1]):
                     for cor_id in range(self.cell_types_numbers['Cor'][1]):
-                        self.weight_lines[ct][plot_id][msn_id].set_data(self.weight_times, self.weights_over_time[(ct, plot_id, msn_id, selected_goal_index, cor_id)])
+                        self.weight_lines[ct][plot_id][msn_id].set_data(self.weight_times, self.weights_over_time[(ct, action_id, msn_id, selected_goal_index, cor_id)])
             self.activation_lines[plot_id].set_data(self.activation_times, self.activation_over_time[action])
             new_xlim = 0, max(self.plot_interval, int(current_time))
             if self.axs_plot[self.row_weights][plot_id].get_xlim() != new_xlim:
@@ -1176,7 +1201,7 @@ joint_actuator_mapping = {''.join(bits): ''.join(bits) for bits in product('10',
 joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
 '''
 
-#'''
+'''
 grasp_types = ["Precision pinch", "Power grasp"]
 joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
 #actuators = ["Thumb oppositor", "Thumb abductor", "Thumb flexor", "Thumb extensor", "Index finger flexor", "Index finger extensor", "Middle finger flexor", "Middle finger extensor", "Ring finger flexor", "Ring finger extensor", "Pinky finger flexor", "Pinky finger extensor"]
@@ -1187,7 +1212,7 @@ grasp_type_joint_table = create_goal_action_table(mapping=grasp_type_joint_mappi
 joint_actuator_mapping = {}
 joint_actuator_mapping = {''.join(bits): ''.join(bits) for bits in product('10', repeat=len(joints)) if any(bit == '1' for bit in bits)}
 joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
-#'''
+'''
 
 bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=6)
 bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
