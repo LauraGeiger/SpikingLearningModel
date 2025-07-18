@@ -253,49 +253,53 @@ class BasalGanglia:
                 # Update selections in basal ganglia overview plot
                 time_step = time.time()
                 self.update_selections()
-                #print(f"{(time.time() - time_step):.6f} s update_selections")
+                if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_selections")
 
                 time_step = time.time()
                 # Run simulation for half of the interval
                 h.continuerun(h.t + self.plot_interval)# // 2)
-                #print(f"{(time.time() - time_step):.6f} s continuerun")
+                if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
 
                 # --- Action selection and reward update ---#
                 #if state == 0: # executed after half time of plot_interval
+                
+                start_time_first_part = time.time()
                 for loop in self.loops:
                     time_step = time.time()
                     loop.analyze_thalamus_activation_time(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s analyze_thalamus_activation_time")
+                    if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s analyze_thalamus_activation_time {loop.name}")
                     time_step = time.time()
                     loop.select_action(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s select_action")
+                    if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s select_action {loop.name}")
                     time_step = time.time()
                     loop.determine_reward(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s determine_reward")
-
+                    if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s determine_reward {loop.name}")
+                duration = time.time() - start_time_first_part
+                print(f"{duration:.6f} s first part")
                 # --- Weight and plot update ---#  
                 #else: # executed after full time of plot_interval
+                start_time_second_part = time.time()
                 for loop in self.loops:
                     time_step = time.time()
                     loop.cortical_input_stimuli(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s cortical_input_stimuli")
+                    if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s cortical_input_stimuli {loop.name}")
                     time_step = time.time()
                     loop.update_weights(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s update_weights")
+                    if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_weights {loop.name}")
                     time_step = time.time()
                     loop.update_plots(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s update_plots")
-                plt.pause(0.001)
+                    if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_plots {loop.name}")
+                duration = time.time() - start_time_second_part
+                print(f"{duration:.6f} s second part")
 
                 # Pause simulation
                 if int(h.t) % self.simulation_stop_time == 0:
                     self.toggle_pause()
 
-                end_time = time.time()
-                duration = end_time - start_time
-                #print(f"Loop {state} took {duration:.6f} s")
+                duration = time.time() - start_time
+                print(f"Loop took {duration:.6f} s")
 
-                state = 1 - state # toggle state
+                #state = 1 - state # toggle state
             
         except KeyboardInterrupt:
                 print("\nCtrl-C pressed. Storing data...")
@@ -564,7 +568,6 @@ class BasalGangliaLoop:
         self.gs_control = self.gs[0].subgridspec(1, 2 + len(self.goals_names), width_ratios=[1] + [1] * len(self.goals_names) + [2])
         self.gs_plot = self.gs[1].subgridspec(self.rows, self.actions_to_plot)
         self.axs_control = [self.fig.add_subplot(self.gs_control[i]) for i in range(2 + len(self.goals_names))]
-        #self.axs_plot = [[self.fig.add_subplot(self.gs_plot[i, j]) for j in range(self.actions_to_plot)] for i in range(self.rows)]
         self.axs_plot = []
         for i in range(self.rows):
             row = []
@@ -872,42 +875,6 @@ class BasalGangliaLoop:
             else:
                 self.expected_reward_over_time[goal].append(self.expected_reward_over_time[goal][-1])
 
-    def OLD_update_weights(self, current_time):
-        # Analyze firing rates
-        #self.rates['SNc'], self.rates_rel['SNc'] = self.analyze_firing_rate('SNc', window=self.plot_interval)
-        self.rates['MSNd'], self.rates_rel['MSNd'] = self.analyze_firing_rate('MSNd', window=self.plot_interval, average=False)
-        self.rates['MSNi'], self.rates_rel['MSNi'] = self.analyze_firing_rate('MSNi', window=self.plot_interval, average=False)
-
-        # TODO: set dopamine value based on relative SNc rate (lenth of dip and burst to be adapted)
-        #print(f"dopamine over time: {dopamine_over_time}")
-        #print(f"rel SNc rate: {rates_rel['SNc']}")
-
-        # Update weights
-        self.weight_times.append(int(current_time))
-        for goal_id, goal in enumerate(self.goals):
-            for cor_id in range(self.cell_types_numbers['Cor'][1]):
-                for action_id, action in enumerate(self.actions):
-                    for ct in self.weight_cell_types:
-                        for msn_id in range(self.cell_types_numbers[ct][1]):
-                            delta_w = 0
-                            if goal == self.selected_goal and self.selected_action and action == self.selected_action[0]:
-                                delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[goal][-1] # rel_rate = 1 corresponds to tonic baseline activity
-                            if ct == 'MSNd':
-                                # dopamine facilitates active MSNd and inhibits less active MSNd
-                                delta_w = delta_w 
-                            elif ct == 'MSNi':
-                                # high dopamine increases inhibition, low dopamine suppresses inhibition
-                                delta_w = - delta_w
-                            key = (ct, action_id, msn_id, goal_id, cor_id)
-                            new_weight = max(0, self.weights_over_time[key][-1] + delta_w) # Update weight ensure weight is non-zero
-                            self.weights_over_time[key].append(round(new_weight, 4))
-                            
-                            #idx = goal_id * self.cell_types_numbers['Cor'][1] * self.cell_types_numbers[ct][0] * self.cell_types_numbers[ct][1] + action_id * self.cell_types_numbers[ct][1] + k
-                            #key = (goal_id, cor_id, action_id, msn_id)
-                            idx = self.cor_nc_index_map[f'Cor_to_{ct}'][key]
-                            self.ncs[f'Cor_to_{ct}'][idx].weight[0] = new_weight # update weight of cortical input stimulation
-                    if output: print(f"{self.weight_times[-1]} ms: Action {action}: Goal {goal} rel rate MSNd = {[f'{rate_rel:.2f}' for rate_rel in self.rates_rel['MSNd'][action_id]]}, rel rate SNc = {self.rates_rel['SNc'][action_id]:.2f}, Exp. Reward = {self.expected_reward_over_time[f'{goal}{self.cortical_input_dur_rel[goal] != 0}'][-1]:.2f}, DA = {self.dopamine_over_time[goal][-1]}, Cor-MSNd-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_to_MSNd'][action_id*self.cell_types_numbers['MSNd'][1]:(action_id+1)*self.cell_types_numbers['MSNd'][1]]]}, Cor-MSNi-Weights = {[f'{nc.weight[0]:.2f}' for nc in self.ncs['Cor_to_MSNi'][action_id*self.cell_types_numbers['MSNi'][1]:(action_id+1)*self.cell_types_numbers['MSNi'][1]]]}")               
-    
     def update_weights(self, current_time):
         # Analyze firing rates
         #self.rates['SNc'], self.rates_rel['SNc'] = self.analyze_firing_rate('SNc', window=self.plot_interval)
@@ -941,31 +908,42 @@ class BasalGangliaLoop:
     def update_plots(self, current_time):
         selected_goal_index = self.goals.index(self.selected_goal)
         
+        # Determine actions to plot (dynamic)
+        last_active_indices = { 
+            action: (len(act) - 1 - next(i for i, v in enumerate(reversed(act)) if v) if any(act) else -1)
+            for action, act in self.activation_over_time.items()}
+        sorted_by_recent = sorted(self.actions, key=lambda a: last_active_indices[a], reverse=True)
+        actions_to_plot_now = sorted_by_recent[:self.actions_to_plot]
+
         # Update plots
-        for action_id in range(self.actions_to_plot):
-            action = self.actions[action_id]
+        for plot_id, action in enumerate(actions_to_plot_now):
             # Membrane potential plot
             for ct in self.cell_types:
                 if ct == 'Cor':
-                    voltages = np.array([np.array(self.recordings[ct][selected_goal_index][j]) for j in range(self.cell_types_numbers[ct][1])])
+                    voltages = np.array([(self.recordings[ct][selected_goal_index][j]) for j in range(self.cell_types_numbers[ct][1])])
                 else:
-                    voltages = np.array([np.array(self.recordings[ct][action_id][j]) for j in range(self.cell_types_numbers[ct][1])])
+                    voltages = np.array([(self.recordings[ct][plot_id][j]) for j in range(self.cell_types_numbers[ct][1])])
                 avg_voltage = np.mean(voltages, axis=0)
-                self.mem_lines[ct][action_id].set_data(np.array(self.t_vec), avg_voltage)
-                self.axs_plot[self.row_potential][action_id].set_xlim(max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
+                self.mem_lines[ct][plot_id].set_data(np.array(self.t_vec), avg_voltage)
+                new_xlim = (max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
+                if self.axs_plot[self.row_potential][plot_id].get_xlim() != new_xlim:
+                    self.axs_plot[self.row_potential][plot_id].set_xlim(*new_xlim)
+            self.axs_plot[self.row_potential][plot_id].set_title(action)
 
             # Spike raster plot
             y_base = self.total_cells
             for ct in self.cell_types:
                 all_spikes = []
+                if ct == 'Cor':
+                    spike_block = self.spike_times[ct][selected_goal_index]
+                else:
+                    spike_block = self.spike_times[ct][plot_id]
+                    
                 for k in range(self.cell_types_numbers[ct][1]):
-                    if ct == 'Cor':
-                        spikes = np.array(self.spike_times[ct][selected_goal_index][k].to_python())
-                    else:
-                        spikes = np.array(self.spike_times[ct][action_id][k].to_python())
                     y_val = y_base - k
+                    spikes = np.array(spike_block[k].to_python())
                     y_vals = np.ones_like(spikes) * y_val
-                    self.raster_lines[ct][action_id][k].set_data(spikes, y_vals)
+                    self.raster_lines[ct][plot_id][k].set_data(spikes, y_vals)
                     all_spikes.extend(spikes)
                 # Rate lines
                 if all_spikes:
@@ -982,22 +960,23 @@ class BasalGangliaLoop:
                             spike_rate_max = 1000.0 / self.stim_intervals[ct] # Hz
                         rate_scaled = (rate) / (spike_rate_max + 1e-9)
                         rate_scaled = rate_scaled * (self.cell_types_numbers[ct][1] - 1) + y_base - self.cell_types_numbers[ct][1] + 1
-                        self.rate_lines[ct][action_id].set_data(bin_ends, rate_scaled)
+                        self.rate_lines[ct][plot_id].set_data(bin_ends, rate_scaled)
                     else:
-                        self.rate_lines[ct][action_id].set_data([], [])          
+                        self.rate_lines[ct][plot_id].set_data([], [])          
                 y_base -= self.cell_types_numbers[ct][1]
-            self.axs_plot[self.row_spike][action_id].set_xlim(max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
+            new_xlim = max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time))
+            if self.axs_plot[self.row_spike][plot_id].get_xlim() != new_xlim:
+                self.axs_plot[self.row_spike][plot_id].set_xlim(*new_xlim)
 
             # Weight plot
             for ct in self.weight_cell_types:
                 for msn_id in range(self.cell_types_numbers[ct][1]):
                     for cor_id in range(self.cell_types_numbers['Cor'][1]):
-                        self.weight_lines[ct][action_id][msn_id].set_data(self.weight_times, self.weights_over_time[(ct, action_id, msn_id, selected_goal_index, cor_id)])
-            self.activation_lines[action_id].set_data(self.activation_times, self.activation_over_time[action])
-            self.axs_plot[self.row_weights][action_id].set_xlim(0, max(self.plot_interval, int(current_time)))
-            all_weights = [w for lst in self.weights_over_time.values() for w in lst if lst]  # flatten and exclude empty lists
-            ymin, ymax = min(all_weights), max(all_weights)
-            self.axs_plot[self.row_weights][action_id].set_ylim(-0.1, max(1.1, ymax*1.1))
+                        self.weight_lines[ct][plot_id][msn_id].set_data(self.weight_times, self.weights_over_time[(ct, plot_id, msn_id, selected_goal_index, cor_id)])
+            self.activation_lines[plot_id].set_data(self.activation_times, self.activation_over_time[action])
+            new_xlim = 0, max(self.plot_interval, int(current_time))
+            if self.axs_plot[self.row_weights][plot_id].get_xlim() != new_xlim:
+                self.axs_plot[self.row_weights][plot_id].set_xlim(*new_xlim)
 
         # Reward plot
         if set(self.selected_goal) != {'0'}:
@@ -1008,7 +987,9 @@ class BasalGangliaLoop:
             self.expected_reward_lines.set_data(self.reward_times, [0]*len(self.reward_times))
             self.reward_lines.set_data(self.reward_times, [0]*len(self.reward_times))
             self.dopamine_lines.set_data(self.reward_times, [0]*len(self.reward_times))
-        self.axs_control[-1].set_xlim(0, max(self.plot_interval, int(current_time)))
+        new_xlim = 0, max(self.plot_interval, int(current_time))
+        if self.axs_control[-1].get_xlim() != new_xlim:
+            self.axs_control[-1].set_xlim(*new_xlim)
     
     def save_data(self, path):
         # Workbook
@@ -1186,7 +1167,6 @@ joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, 
 '''
 grasp_types = ["Precision pinch", "Power grasp"]
 joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion"]
-#actuators = ["Thumb oppositor", "Thumb abductor", "Thumb flexor", "Thumb extensor", "Index finger flexor", "Index finger extensor", "Middle finger flexor", "Middle finger extensor", "Ring finger flexor", "Ring finger extensor", "Pinky finger flexor", "Pinky finger extensor"]
 actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Middle finger flexor"]
 grasp_type_joint_mapping = {"10": "1110", # Precision pinch
                             "01": "1111"} # Power grasp
@@ -1196,7 +1176,7 @@ joint_actuator_mapping = {''.join(bits): ''.join(bits) for bits in product('10',
 joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
 '''
 
-'''
+#'''
 grasp_types = ["Precision pinch", "Power grasp"]
 joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
 #actuators = ["Thumb oppositor", "Thumb abductor", "Thumb flexor", "Thumb extensor", "Index finger flexor", "Index finger extensor", "Middle finger flexor", "Middle finger extensor", "Ring finger flexor", "Ring finger extensor", "Pinky finger flexor", "Pinky finger extensor"]
@@ -1207,10 +1187,10 @@ grasp_type_joint_table = create_goal_action_table(mapping=grasp_type_joint_mappi
 joint_actuator_mapping = {}
 joint_actuator_mapping = {''.join(bits): ''.join(bits) for bits in product('10', repeat=len(joints)) if any(bit == '1' for bit in bits)}
 joint_actuator_table = create_goal_action_table(mapping=joint_actuator_mapping, goals=joints, actions=actuators)
-'''
+#'''
 
-bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=7)
-bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=7)
+bg_m = BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=6)
+bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
 bg = BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
 
