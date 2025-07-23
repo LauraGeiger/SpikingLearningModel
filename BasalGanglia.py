@@ -1,4 +1,4 @@
-from neuron import h#, coreneuron#, gui
+from neuron import h
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, Slider, TextBox
 from matplotlib import rcParams
@@ -6,6 +6,8 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import time
 import random
+import serial
+import threading
 from openpyxl import Workbook
 from datetime import datetime
 from itertools import product
@@ -20,7 +22,6 @@ from matplotlib.animation import FuncAnimation
 
 
 h.load_file("stdrun.hoc")
-#coreneuron.enable = True
 
 #--- BasalGanglia ------------------------------------------------------------------------------------------------------------------------------------------------#
 
@@ -30,9 +31,16 @@ class BasalGanglia:
         self.loops = loops
         self.buttons = {}
         self.paused = False
+        self.hw_connected = False
         self.plot_interval = 100  # ms
         self.simulation_stop_time = 10000 # ms
         self.iteration = 0
+        self.ani = None
+
+        # HW
+        self.ser_sensor = None
+        self.ser_exo = None
+        self.sensor_baseline = None
 
         self._init_loops()
         self._init_plotting()
@@ -52,7 +60,7 @@ class BasalGanglia:
         self.fig = plt.figure(figsize=(13, 8))
         self.fig.canvas.manager.set_window_title('BasalGangliaOverview')
         self.gs = gridspec.GridSpec(2, 1, figure=self.fig, height_ratios=[1,10])  
-        self.gs_control = self.gs[0].subgridspec(1, 3, width_ratios=[1,1,3])
+        self.gs_control = self.gs[0].subgridspec(1, 4, width_ratios=[1,1,1,3])
         self.gs_plot = self.gs[1].subgridspec(1, 4, width_ratios=[1,1,10,1])     
         self.gs_loops = self.gs_plot[0].subgridspec(len(self.loops), 1)
         self.gs_names = self.gs_plot[1].subgridspec(len(self.loops) + 1, 1)
@@ -79,8 +87,15 @@ class BasalGanglia:
         self.buttons['reset'] = Button(ax_reset, 'Reset')
         self.buttons['reset'].on_clicked(self.reset)
 
+        # HW button
+        self.axs_control[2] = self.fig.add_subplot(self.gs_control[2])
+        self.axs_control[2].set_axis_off() 
+        ax_hw = self.axs_control[2].inset_axes([0,0,1,1]) #[x0, y0, width, height]
+        self.buttons['hw'] = Button(ax_hw, 'Connect HW')
+        self.buttons['hw'].on_clicked(self.connect_hw)
+
         # Reward plot
-        self.ax_reward = self.fig.add_subplot(self.gs_control[2])
+        self.ax_reward = self.fig.add_subplot(self.gs_control[3])
         self.ax_reward.set_xlabel('Iteration')
         self.ax_reward.set_ylabel('Reward')
         self.ax_reward.set_xlim(0, 10)  # initial limits, will expand dynamically
@@ -178,14 +193,91 @@ class BasalGanglia:
             
     def reset(self, event=None):
         for loop in self.loops:
-            plt.close(loop.fig) 
-            #loop.fig.clf()
+            plt.close(loop.fig)
         plt.close(self.fig)
-        #self.fig.clf()
         print("Reset of Basal Ganglia")
-        create_BasalGanglia(no_of_joints=len(self.loops[0].actions))
+        create_BasalGanglia(no_of_joints=len(self.loops[0].goals_names))
+
+    def determine_sensor_baselines(self):
+        baseline_samples = []
+        required_samples = 10
+        max_attempts = 100 
+        attempt = 0
+        
+        while len(baseline_samples) < required_samples and attempt < max_attempts:
+            if self.ser_sensor.in_waiting > 0:
+                line = self.ser_sensor.readline().decode('utf-8', errors='ignore').strip()
+                try:
+                    values = [float(x) for x in line.split(',')]
+                    if len(values) > 0:
+                        baseline_samples.append(values)
+                except ValueError:
+                    print(f"Ignored malformed line: {line}")
+            time.sleep(0.05)
+            attempt += 1
+
+        if len(baseline_samples) == required_samples:
+            # Transpose and average element-wise
+            self.sensor_baseline = [round(sum(col) / required_samples, 2) for col in zip(*baseline_samples)]
+            print(f"Sensor baseline (average of {required_samples} samples): {self.sensor_baseline}")
+        else:
+            print("Failed to collect enough valid sensor samples for baseline.")
+
+    def connect_hw(self, event=None):
+        successful = True
+
+        if not self.hw_connected:
+            # Define serial connection for sensor feedback
+            try:
+                self.ser_sensor.open()
+                print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
+                self.determine_sensor_baselines()
+
+            except Exception:
+                try:
+                    self.ser_sensor = serial.Serial(
+                        port='COM7',        # For ESP32
+                        baudrate=115200,    # Baud rate for serial connection to sensors
+                        timeout=1           # Timeout for read in seconds
+                    )
+                    print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
+                    self.determine_sensor_baselines()
+                    
+                except Exception as e:
+                    successful = False
+                    print(f"Serial connection to sensors failed due to exception: {e}")
+            
+            # Define serial connection via bluetooth to exoskeleton
+            try:
+                self.ser_exo.open()
+                print(f"Serial connection to exoskeleton established on port {self.ser_exo.port}")
+            except Exception:
+                try:
+                    self.ser_exo = serial.Serial(
+                        port='COM11',       # For HC-06
+                        baudrate=9600,      # Baud rate for connection to bluetooth module
+                        timeout=1           # Timeout for read in seconds
+                    )
+                    print(f"Serial connection to exoskeleton established on port {self.ser_exo.port}")
+                except Exception as e:
+                    #successful = False
+                    print(f"Serial connection to exoskeleton failed due to exception: {e}")
+        else:
+            try:
+                self.ser_sensor.close()
+            except Exception: None
+            try:
+                self.ser_exo.close()
+            except Exception: None
+            print("Serial connections closed")
+
+        if successful:
+            self.hw_connected = not self.hw_connected
+            self.buttons['hw'].label.set_text('Disconnect HW' if self.hw_connected else 'Connect HW')
 
     def update_selections(self, frame=None):
+        self.iteration = int(h.t / self.plot_interval)
+        
         for idx, loop in enumerate(self.loops):
             if loop.selected_goal:
                 visibility = False if set(loop.selected_goal) == {'0'} else True
@@ -193,8 +285,14 @@ class BasalGanglia:
 
             if idx == 0:
                 for i, name in enumerate(loop.actions_names):
-                    if loop.selected_action:
-                        char = loop.selected_action[0][i]
+                    if self.hw_connected:
+                        loop.read_sensor_data(serial=self.ser_sensor, sensor_baseline=self.sensor_baseline)
+                    if loop.selected_goal:
+                        char = '0'
+                        if loop.performed_action:
+                            char = loop.performed_action[i]
+                        elif loop.selected_action:
+                            char = loop.selected_action[0][i]
                         selected = char == '1'
                         reward = loop.reward_over_time[loop.selected_goal][-1]
                         self.highlight_textbox(name, selected, reward)
@@ -223,8 +321,6 @@ class BasalGanglia:
         # Update axes limits dynamically
         max_iter = max(rl['xdata'][-1] for rl in self.reward_lines.values() if rl['xdata'])
         self.ax_reward.set_xlim(0, max(10, max_iter + 1))
-
-        self.iteration += 1
     
     def highlight_textbox(self, name, selected, reward):
         if selected:
@@ -276,6 +372,56 @@ class BasalGanglia:
                 avg_prob = total / count
                 if self.buttons.get(f'probability_{name}'):
                     self.buttons[f'probability_{name}'].set_text(f'{avg_prob:.1%}')
+    
+    def generate_action_command(self):
+        bit_to_actuator = {
+            0: 4,   # Thumb oppositor
+            1: 1,   # Thumb flexor
+            2: 6,   # Index flexor
+            3: 8,   # Middle flexor
+            4: 10,  # Ring flexor
+            5: 12   # Pinky flexor
+        }
+
+        action_command = ''
+        if self.loops[0].selected_action:
+            action_bits = self.loops[0].selected_action[0]  
+            duration = self.loops[0].selected_action[1]   
+
+            action_command_parts = []
+
+            for i, bit in enumerate(action_bits):
+                if bit == '1':
+                    actuator = bit_to_actuator[i]
+                    # Inlet at time 0
+                    action_command_parts.append(f"0-{actuator}-i")
+
+            for i, bit in enumerate(action_bits):
+                if bit == '1':
+                    actuator = bit_to_actuator[i]
+                    # Hold at the specified duration
+                    action_command_parts.append(f"{duration}-{actuator}-h")
+
+            action_command = '/'.join(action_command_parts) + '/'
+        
+        return action_command, duration
+
+    def perform_action(self):
+        duration = 0
+        try:
+            # Perform selected action of motor loop
+            if self.loops[0].selected_action:
+                release_command = ''
+                for actuator in range(1,14):
+                    release_command += f'0-{actuator}-o/'
+                action_command, duration = self.generate_action_command()
+                start_command = 'S'
+                #print(f"Perform action: {self.loops[0].selected_action[0]} for {self.loops[0].selected_action[1]}s → Command: {action_command}")
+                self.ser_exo.write(release_command.encode())
+                self.ser_exo.write(action_command.encode())
+                self.ser_exo.write(start_command.encode())
+        except Exception: None
+        return duration
 
     def run_simulation(self):
         try:
@@ -299,11 +445,10 @@ class BasalGanglia:
                 for loop in self.loops:
                     if loop.selected_goal: loop.cortical_input_stimuli(current_time=h.t)
                     
-                
                 # Run simulation
                 time_step = time.time()
                 h.continuerun(h.t + self.plot_interval)
-                #if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
+                if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
 
                 # --- Action selection and reward update ---#                
                 start_time_first_part = time.time()
@@ -314,8 +459,19 @@ class BasalGanglia:
                     time_step = time.time()
                     loop.select_action(current_time=h.t)
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s select_action {loop.name}")
+                
+                if self.hw_connected:
+                    if self.ani:
+                        self.ani.event_source.start()
+                    else:
+                        self.ani = FuncAnimation(self.fig, self.update_selections, interval=500, cache_frame_data=False) 
+                    duration = self.perform_action()
+                    stop_timer = self.fig.canvas.new_timer(interval=int(max(duration, 5) * 1000))  # milliseconds
+                    stop_timer.add_callback(self.ani.event_source.stop)
+                    
+                for loop in self.loops:
                     time_step = time.time()
-                    loop.determine_reward(current_time=h.t)
+                    loop.determine_reward(current_time=h.t, hw_connected=self.hw_connected, serial=self.ser_sensor, sensor_baseline=self.sensor_baseline)
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s determine_reward {loop.name}")
                 duration = time.time() - start_time_first_part
                 #print(f"{duration:.6f} s first part")
@@ -337,11 +493,18 @@ class BasalGanglia:
                     self.toggle_pause()
 
                 duration = time.time() - start_time
-                #print(f"Loop took {duration:.6f} s")
+                print(f"Loop took {duration:.6f} s")
             
         except KeyboardInterrupt:
                 print("\nCtrl-C pressed. Storing data...")
                 plt.close()
+                if self.hw_connected:
+                    try:
+                        self.ser_sensor.close()
+                    except Exception: None
+                    try:
+                        self.ser_exo.close()
+                    except Exception: None
 
         finally:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -364,6 +527,7 @@ class BasalGangliaLoop:
         self.actions_names = output
         self.actions = [''.join(bits) for bits in product('10', repeat=len(output)) if any(bit == '1' for bit in bits)] # binary combination of all outputs
         self.selected_action = None
+        self.performed_action = None
         if actions_to_plot is not None:
             self.actions_to_plot = len(self.actions) if len(self.actions) <= actions_to_plot else actions_to_plot
         self.binary_input = binary_input
@@ -453,6 +617,9 @@ class BasalGangliaLoop:
         self.rates = {}
         self.rates_rel = {}
 
+        # HW
+        self.sensor_threshold = 0.2
+
         self._init_cells()
         self._init_spike_detectors()
         self._init_stimuli()
@@ -540,6 +707,25 @@ class BasalGangliaLoop:
                                 index += 1
             else:
                 for action_id, action in enumerate(self.actions):
+                    '''
+                    pre_cells = self.cells[pre_group][action_id]
+                    post_cells = self.cells[post_group][action_id]
+                    if len(pre_cells) > len(post_cells):
+                        pre_cells = random.sample(pre_cells, len(post_cells))
+                    elif len(post_cells) > len(pre_cells):
+                        post_cells = random.sample(post_cells, len(pre_cells))
+                    for pre_cell, post_cell in zip(pre_cells, post_cells):
+                        syn = h.ExpSyn(post_cell(0.5))
+                        syn.e = e_rev
+                        syn.tau = tau
+                        nc = h.NetCon(pre_cell(0.5)._ref_v, syn, sec=pre_cell)
+
+                        nc.weight[0] = weight
+                        nc.delay = delay
+                        self.syns[label].append(syn)
+                        self.ncs[label].append(nc)
+                    '''
+                    
                     for pre_cell in self.cells[pre_group][action_id]:
                         for post_cell in self.cells[post_group][action_id]:
                             syn = h.ExpSyn(post_cell(0.5))
@@ -550,7 +736,7 @@ class BasalGangliaLoop:
                             nc.delay = delay
                             self.syns[label].append(syn)
                             self.ncs[label].append(nc)
-
+                    
     def _init_connection_stimuli(self):
         # Additional stimuli for dopamine bursts
         self.stims.update({'SNc_burst': []})
@@ -657,7 +843,6 @@ class BasalGangliaLoop:
         # Spike raster plot and rate lines
         self.raster_lines = {ct: [[] for _ in range(self.actions_to_plot)] for ct in self.cell_types}
         self.rate_lines = {ct: [] for ct in self.cell_types}
-        self.rate_lines.update({'Threshold': []})
         self.axs_plot[self.row_spike][0].set_ylabel('Spike raster')
 
         for i, ch in enumerate(range(self.actions_to_plot)):
@@ -885,15 +1070,34 @@ class BasalGangliaLoop:
                 self.child_loop.buttons[f'cor_dur_slider{id}'].set_val(0 if state == 0 else self.selected_action[1])
             self.child_loop.update_selected_goal()
 
-    def determine_reward(self, current_time):
+    def read_sensor_data(self, serial, sensor_baseline):
+        # Read in sensor data
+        if serial.in_waiting > 0:
+            while serial.in_waiting > 0:
+                line = serial.readline().decode('utf-8', errors='ignore').strip()
+            values = [float(x) for x in line.split(',')]
+            diff = [round(v - b, 2) for v, b in zip(values, sensor_baseline)]
+            self.performed_action = ''.join(['1' if d > self.sensor_threshold else '0' for d in diff[5:5+6]]) # 6 = num flexion sensor
+
+    def determine_reward(self, current_time, hw_connected=None, serial=None, sensor_baseline=None):
         self.reward_times.append(int(current_time))
-        
+
+        self.performed_action = None
+        if not self.child_loop and hw_connected and serial:
+            self.read_sensor_data(serial, sensor_baseline)
+            
         goal_state = tuple((goal_name, dur != 0) for goal_name, dur in zip(self.goals_names, self.cortical_input_dur_rel))
         target_actions = self.goal_action_table.get(goal_state, {})
         target_action_indices = ''.join('1' if v else '0' for v in target_actions.values())
         
         for goal in self.goals:
-            if goal == self.selected_goal and self.selected_action and self.selected_action[0] == target_action_indices:
+            action_indices = None
+            if self.performed_action:
+                action_indices = self.performed_action
+            elif self.selected_action:
+                action_indices = self.selected_action[0]
+
+            if goal == self.selected_goal and action_indices == target_action_indices:
                 self.reward_over_time[goal].append(1)
             else:
                 self.reward_over_time[goal].append(0)
@@ -907,7 +1111,7 @@ class BasalGangliaLoop:
                 elif self.reward_over_time[goal][-1] - current_expected_reward < 0:
                     self.SNc_dip(event=None, action=action)
             '''
-            
+        
             if goal == self.selected_goal:
                 #For selected goal update expected reward based on actual reward
                 self.expected_reward_over_time[goal].append(round(current_expected_reward + 0.1 * (self.reward_over_time[goal][-1] - current_expected_reward), 4))
@@ -1209,7 +1413,6 @@ ms_to_s = FuncFormatter(lambda x, _: f'{x/1000}' if x % 100 == 0 else '')
 #--- Basal Ganglia ---------------------------------------------------------------------------------------------------------------------------------------------------#
 
 def create_BasalGanglia(no_of_joints=3):
-    print(no_of_joints)
     if no_of_joints == 4:
         grasp_types = ["Precision pinch", "Power grasp"]
         joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Remaining fingers flexion"]
@@ -1261,6 +1464,7 @@ def create_BasalGanglia(no_of_joints=3):
     BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
 create_BasalGanglia(no_of_joints=4)
+
 
 
 
