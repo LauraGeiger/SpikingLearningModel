@@ -1,3 +1,5 @@
+// ESP32 Dev Module
+
 // Define Pins of MUX1
 const int mux1potPin = 35;  // Analog Input
 const int mux1outputPin = 19;  // Digital Output
@@ -17,7 +19,6 @@ const int mux2numSensors = (numSensors < 16) ? 0 : numSensors - 16;
 
 const int numReadings = 10;
 
-const int thresholdValue = 200;
 const int maxSensorValue = 4095;
 
 int baseline[numSensors];   // To store baseline value
@@ -64,7 +65,7 @@ void loop() {
         digitalWrite(mux1outputPin, HIGH);
         delay(1);
 
-        sensors[s] = normalizedValue_mBar;
+        sensors[s] = rawValue; //normalizedValue_mBar;
 
         // Send sensor values as a CSV line (comma-separated)
         Serial.print(sensors[s], 2); // round to 2 decimals
@@ -88,7 +89,7 @@ void loop() {
         digitalWrite(mux2outputPin, HIGH);
         delay(1);
 
-        sensors[s] = normalizedValue_mBar;
+        sensors[s] = rawValue; //normalizedValue_mBar;
 
         // Send sensor values as a CSV line (comma-separated)
         Serial.print(sensors[s], 2); // round to 2 decimals
