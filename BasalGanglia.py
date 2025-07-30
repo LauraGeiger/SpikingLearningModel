@@ -43,7 +43,12 @@ class BasalGanglia:
         # HW
         self.ser_sensor = None
         self.ser_exo = None
-        self.sensor_baseline = None
+        #self.sensor_baseline = None
+        self.recorded_sensor_data_flex = []
+        self.recorded_sensor_data_touch = []
+        self.performed_action = None
+        self.num_flex_sensors = 6
+        self.num_touch_sensors = 5
 
         self._init_loops()
         self._init_plotting()
@@ -198,9 +203,17 @@ class BasalGanglia:
         for loop in self.loops:
             plt.close(loop.fig)
         plt.close(self.fig)
+        if self.hw_connected:
+            try:
+                self.ser_sensor.close()
+            except Exception: None
+            try:
+                self.ser_exo.close()
+            except Exception: None
+
         print("Reset of Basal Ganglia")
         create_BasalGanglia(no_of_joints=len(self.loops[0].goals_names))
-
+    '''
     def determine_sensor_baselines(self):
         baseline_samples = []
         required_samples = 10
@@ -225,7 +238,7 @@ class BasalGanglia:
             print(f"Sensor baseline (average of {required_samples} samples): {self.sensor_baseline}")
         else:
             print("Failed to collect enough valid sensor samples for baseline.")
-
+    '''
     def connect_hw(self, event=None):
         successful = True
 
@@ -234,7 +247,7 @@ class BasalGanglia:
             try:
                 self.ser_sensor.open()
                 print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
-                self.determine_sensor_baselines()
+                #self.determine_sensor_baselines()
 
             except Exception:
                 try:
@@ -244,7 +257,7 @@ class BasalGanglia:
                         timeout=1           # Timeout for read in seconds
                     )
                     print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
-                    self.determine_sensor_baselines()
+                    #self.determine_sensor_baselines()
                     
                 except Exception as e:
                     #successful = False
@@ -278,6 +291,108 @@ class BasalGanglia:
             self.hw_connected = not self.hw_connected
             self.buttons['hw'].label.set_text('Disconnect\nHW' if self.hw_connected else 'Connect HW')
 
+    def read_sensor_data(self, duration=5):
+        self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
+        self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
+        #print("Reading sensor data...")
+        start_time = time.time()
+        while time.time() - start_time < duration:
+            if self.ser_sensor.in_waiting > 0:
+                line = self.ser_sensor.readline().decode('utf-8', errors='ignore').strip()
+                try:
+                    values = [float(x) for x in line.split(',')]
+                    self.recorded_sensor_data_flex.append(values[:self.num_flex_sensors])
+                    self.recorded_sensor_data_touch.append(values[self.num_flex_sensors:self.num_flex_sensors+self.num_touch_sensors])
+                except ValueError:
+                    print(f"Ignored malformed line: {line}")
+            time.sleep(0.01)  # ~100 Hz sampling
+        #print("Sensor data collection complete.")
+    
+    def analyze_sensor_data_flex(self, alpha=0.8, flexion_threshold=30, extension_threshold=30):
+        try:
+            prev_filtered = [self.recorded_sensor_data_flex[0][i] for i in range(self.num_flex_sensors)]
+            start_filtered = prev_filtered.copy()
+            max_filtered = prev_filtered.copy()
+            min_filtered = prev_filtered.copy()
+
+            self.flexion_detected = [False] * self.num_flex_sensors
+            self.extension_detected = [False] * self.num_flex_sensors
+
+            for sample in self.recorded_sensor_data_flex[1:]:
+                for i in range(self.num_flex_sensors):
+                    # Apply low-pass filter
+                    filtered = alpha * prev_filtered[i] + (1 - alpha) * sample[i]
+
+                    # Track max and min
+                    max_filtered[i] = max(max_filtered[i], filtered)
+                    min_filtered[i] = min(min_filtered[i], filtered)
+
+                    # Detect flexion and extension
+                    if (max_filtered[i] - start_filtered[i]) > flexion_threshold:
+                        self.flexion_detected[i] = True
+                    if (start_filtered[i] - min_filtered[i]) > extension_threshold:
+                        self.extension_detected[i] = True
+
+                    prev_filtered[i] = filtered
+
+            # Print results
+            print("\nFlexion and Extension Detection Results:")
+            for i in range(self.num_flex_sensors):
+                baseline = start_filtered[i]
+                flex = self.flexion_detected[i]
+                extend = self.extension_detected[i]
+                delta_up = max_filtered[i] - start_filtered[i]
+                delta_down = start_filtered[i] - min_filtered[i]
+                print(
+                    f"Sensor {i}: "
+                    f"Baseline = {baseline} "
+                    f"{'👉 Flexion' if flex else '   '} "
+                    f"{'👈 Extension' if extend else ''} "
+                    f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
+                )
+            self.performed_action = ''.join(['1' if value else '0' for value in self.flexion_detected])
+            print(f"performed action = {self.performed_action}")
+        except Exception as e: print(e)
+
+    def analyze_sensor_data_touch(self, alpha=0.8, touch_threshold=20, window=30):
+        try:
+            prev_filtered = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
+            start_filtered = prev_filtered.copy()
+            max_filtered = prev_filtered.copy()
+            min_filtered = prev_filtered.copy()
+
+            self.touch_detected = [False] * self.num_touch_sensors
+
+            for sample in self.recorded_sensor_data_touch[1:]:
+                for i in range(self.num_touch_sensors):
+                    # Apply low-pass filter
+                    filtered = alpha * prev_filtered[i] + (1 - alpha) * sample[i]
+
+                    # Track max and min
+                    max_filtered[i] = max(max_filtered[i], filtered)
+                    min_filtered[i] = min(min_filtered[i], filtered)
+
+                    # Detect touch
+                    if (max_filtered[i] - start_filtered[i]) > touch_threshold:
+                        self.touch_detected[i] = True
+
+                    prev_filtered[i] = filtered
+
+            # Print results
+            print("\nTouch Detection Results:")
+            for i in range(self.num_touch_sensors):
+                baseline = start_filtered[i]
+                touch = self.touch_detected[i]
+                delta_up = max_filtered[i] - start_filtered[i]
+                delta_down = start_filtered[i] - min_filtered[i]
+                print(
+                    f"Sensor {i}: "
+                    f"Baseline = {baseline} "
+                    f"{'👉 Touch' if touch else '   '} "
+                    f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
+                )
+        except Exception as e: print(e)
+
     def update_selections(self, frame=None):
         self.iteration = int(h.t / self.plot_interval)
         
@@ -288,12 +403,10 @@ class BasalGanglia:
 
             if idx == 0:
                 for i, name in enumerate(loop.actions_names):
-                    if self.hw_connected and serial:
-                        loop.read_sensor_data(serial=self.ser_sensor, sensor_baseline=self.sensor_baseline)
                     if loop.selected_goal:
                         char = '0'
-                        if loop.performed_action:
-                            char = loop.performed_action[i]
+                        if self.hw_connected and self.performed_action:
+                            char = self.performed_action[i]
                         elif loop.selected_action:
                             char = loop.selected_action[0][i]
                         selected = char == '1'
@@ -344,6 +457,7 @@ class BasalGanglia:
             value = 1
         loop.buttons[f'cor_dur_slider{goal_idx}'].set_val(value)
         loop.update_cor_dur(val=value, goal_idx=goal_idx)
+        self.update_selections()
 
     def update_probability(self, loop_id, probability, visibility):
         if visibility:
@@ -415,34 +529,20 @@ class BasalGanglia:
         try:
             # Perform selected action of motor loop
             if self.loops[0].selected_action:
-                release_command = ''
-                for actuator in range(1,14):
-                    release_command += f'0-{actuator}-o/'
                 action_command, duration = self.generate_action_command()
-                start_command = 'S'
-                #print(f"Release command = {release_command}")
-                #self.ser_exo.write(release_command.encode())
-                #time.sleep(5)
-                #print("Start")
-                #self.ser_exo.write(start_command.encode())
-                #time.sleep(5)
-                #print("Stop")
-                #self.ser_exo.write(start_command.encode())
-                #time.sleep(5)
-                print(f"Perform action: {self.loops[0].selected_action[0]} for {self.loops[0].selected_action[1]}s → Command: {action_command}")
-                self.ser_exo.write(action_command.encode())
-                time.sleep(5)
-                print("Start")
-                self.ser_exo.write(start_command.encode())
-                start_time = time.time()
+                start_stop_command = 'S'
 
-                while time.time() - start_time < 5 + duration:
-                    self.update_selections()
-                    #self.loops[0].read_sensor_data(serial=self.ser_sensor, sensor_baseline=self.sensor_baseline)
-                    time.sleep(0.5)  # adjust for responsiveness
-                print("Stop")
-                self.ser_exo.write(start_command.encode())
-                time.sleep(5)
+                self.ser_sensor.flushInput() # delete values in serial input buffer
+        
+
+                print(f"Perform action: {self.loops[0].selected_action[0]} for {duration}s → Command: {action_command}")
+                self.ser_exo.write(action_command.encode())
+                time.sleep(2)
+
+                self.ser_exo.write(start_stop_command.encode())
+                self.read_sensor_data(duration=duration+1)
+                self.ser_exo.write(start_stop_command.encode())
+                time.sleep(1)
                 
         except Exception as e: print(e)
         return duration
@@ -485,18 +585,14 @@ class BasalGanglia:
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s select_action {loop.name}")
                 
                 if self.hw_connected:
-                    if self.ani:
-                        self.ani.event_source.start()
-                    else:
-                        self.ani = FuncAnimation(self.fig, self.update_selections, interval=500, cache_frame_data=False) 
                     duration = self.perform_action()
-                    self.ani.event_source.stop()
-                    #stop_timer = self.fig.canvas.new_timer(interval=int(max(duration, 5) * 1000))  # milliseconds
-                    #stop_timer.add_callback(self.ani.event_source.stop)
+                    if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
+                    if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
+                    self.update_selections()
                     
                 for loop in self.loops:
                     time_step = time.time()
-                    loop.determine_reward(current_time=h.t, hw_connected=self.hw_connected, serial=self.ser_sensor, sensor_baseline=self.sensor_baseline)
+                    loop.determine_reward(current_time=h.t, hw_connected=self.hw_connected, performed_action=self.performed_action)
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s determine_reward {loop.name}")
                 duration = time.time() - start_time_first_part
                 #print(f"{duration:.6f} s first part")
@@ -528,6 +624,15 @@ class BasalGanglia:
                         self.ser_sensor.close()
                     except Exception: None
                     try:
+                        release_command = ''
+                        for actuator in range(1,14):
+                            release_command += f'0-{actuator}-o/'
+                        self.ser_exo.write(release_command.encode())
+                        time.sleep(2)
+                        self.ser_exo.write('S'.encode())
+                        time.sleep(2)
+                        self.ser_exo.write('S'.encode())
+                        time.sleep(2)
                         self.ser_exo.close()
                     except Exception: None
 
@@ -548,11 +653,11 @@ class BasalGangliaLoop:
         self.name = name
         self.goals_names = input
         self.goals = [''.join(bits) for bits in product('10', repeat=len(input))] # binary combination of all inputs
-        self.selected_goal = None
+        self.selected_goal = ''.join('0' for _ in self.goals_names)
         self.actions_names = output
         self.actions = [''.join(bits) for bits in product('10', repeat=len(output)) if any(bit == '1' for bit in bits)] # binary combination of all outputs
         self.selected_action = None
-        self.performed_action = None
+        #self.performed_action = None
         if actions_to_plot is not None:
             self.actions_to_plot = len(self.actions) if len(self.actions) <= actions_to_plot else actions_to_plot
         self.binary_input = binary_input
@@ -1094,25 +1199,9 @@ class BasalGangliaLoop:
             for id, state in enumerate(list(map(int, self.selected_action[0]))):
                 self.child_loop.buttons[f'cor_dur_slider{id}'].set_val(0 if state == 0 else self.selected_action[1])
             self.child_loop.update_selected_goal()
-
-    def read_sensor_data(self, serial, sensor_baseline):
-        # Read in sensor data
-        if serial.in_waiting > 0:
-            while serial.in_waiting > 0:
-                line = serial.readline().decode('utf-8', errors='ignore').strip()
-            values = [float(x) for x in line.split(',')]
-            #print(f"sensor values = {values}")
-            diff = [round(v - b, 2) for v, b in zip(values, sensor_baseline)]
-            #print(f"sensor diffs = {diff}")
-            self.performed_action = ''.join(['1' if d > self.sensor_threshold else '0' for d in diff[:6]]) # 6 = num flexion sensor
-            print(f"performed action = {self.performed_action}")
-
-    def determine_reward(self, current_time, hw_connected=None, serial=None, sensor_baseline=None):
+    
+    def determine_reward(self, current_time, hw_connected=None, performed_action=None):
         self.reward_times.append(int(current_time))
-
-        self.performed_action = None
-        if not self.child_loop and hw_connected and serial:
-            self.read_sensor_data(serial, sensor_baseline)
             
         goal_state = tuple((goal_name, dur != 0) for goal_name, dur in zip(self.goals_names, self.cortical_input_dur_rel))
         target_actions = self.goal_action_table.get(goal_state, {})
@@ -1120,8 +1209,8 @@ class BasalGangliaLoop:
         
         for goal in self.goals:
             action_indices = None
-            if self.performed_action:
-                action_indices = self.performed_action
+            if hw_connected and not self.child_loop and performed_action:
+                action_indices = performed_action
             elif self.selected_action:
                 action_indices = self.selected_action[0]
 

@@ -1,9 +1,8 @@
 import serial
 import time
 
-
-
-def read_sensor_data(duration=5):
+def read_sensor_data_flex(duration=5):
+    ser_sensor.flushInput() # delete values in serial input buffer
     recorded_data = []  # Stores all sensor readings
     print("Reading sensor data...")
     start_time = time.time()
@@ -19,7 +18,7 @@ def read_sensor_data(duration=5):
     print("Sensor data collection complete.")
     return recorded_data
 
-def analyze_sensor_data(data, alpha=0.8, flexion_threshold=30, extension_threshold=30):
+def analyze_sensor_data_flex(data, alpha=0.8, flexion_threshold=30, extension_threshold=30):
     num_sensors = len(data[0])
     prev_filtered = [data[0][i] for i in range(num_sensors)]
     start_filtered = prev_filtered.copy()
@@ -76,18 +75,18 @@ try:
     time.sleep(2)
 
     bt.write(f'S'.encode())  # Start device
-    recorded_data_1 = read_sensor_data(duration=2+dur)
+    recorded_data_1 = read_sensor_data_flex(duration=2+dur)
 
     bt.write(f'S'.encode())  # Stop device
-    recorded_data_2 = read_sensor_data(duration=2+dur)
+    recorded_data_2 = read_sensor_data_flex(duration=2+dur)
 
     
 
 
     print("Analyzing data 1...")
-    analyze_sensor_data(recorded_data_1)
+    analyze_sensor_data_flex(recorded_data_1)
     print("Analyzing data2...")
-    analyze_sensor_data(recorded_data_2)
+    analyze_sensor_data_flex(recorded_data_2)
 
 
 
