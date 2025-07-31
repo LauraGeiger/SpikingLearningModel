@@ -7,12 +7,10 @@ import numpy as np
 import time
 import random
 import serial
-import threading
 from openpyxl import Workbook
 from datetime import datetime
 from itertools import product
 from matplotlib.ticker import FuncFormatter
-from matplotlib.animation import FuncAnimation
 
 # --- TODO --------------------------------------------------#
 # determine dopamine level from rel SNc rate
@@ -20,7 +18,7 @@ from matplotlib.animation import FuncAnimation
 # Check transistion between grasping types (once learned, there shall be no dip in reward)
 # Check connections (other than cor-str) need to be fully connected
 # Check if the same neurons can be used across actions
-# Check if 5 neurons are required or if les are sufficient
+# Check if 5 neurons are required or if less are sufficient
 # --- TODO --------------------------------------------------#
 
 
@@ -43,12 +41,16 @@ class BasalGanglia:
         # HW
         self.ser_sensor = None
         self.ser_exo = None
-        #self.sensor_baseline = None
         self.recorded_sensor_data_flex = []
         self.recorded_sensor_data_touch = []
         self.performed_action = None
         self.num_flex_sensors = 6
         self.num_touch_sensors = 5
+        self.actuators_flexors = [4, 1, 6, 8, 10, 12]
+        #random.shuffle(self.actuators_flexors)
+        self.actuators_extensors = [2, 7, 9, 11, 13]
+        self.duration_actuators = 0.4 # s
+        self.delay = 0.5 # s
 
         self._init_loops()
         self._init_plotting()
@@ -213,32 +215,7 @@ class BasalGanglia:
 
         print("Reset of Basal Ganglia")
         create_BasalGanglia(no_of_joints=len(self.loops[0].goals_names))
-    '''
-    def determine_sensor_baselines(self):
-        baseline_samples = []
-        required_samples = 10
-        max_attempts = 100 
-        attempt = 0
-        
-        while len(baseline_samples) < required_samples and attempt < max_attempts:
-            if self.ser_sensor.in_waiting > 0:
-                line = self.ser_sensor.readline().decode('utf-8', errors='ignore').strip()
-                try:
-                    values = [float(x) for x in line.split(',')]
-                    if len(values) > 0:
-                        baseline_samples.append(values)
-                except ValueError:
-                    print(f"Ignored malformed line: {line}")
-            time.sleep(0.05)
-            attempt += 1
 
-        if len(baseline_samples) == required_samples:
-            # Transpose and average element-wise
-            self.sensor_baseline = [round(sum(col) / required_samples, 2) for col in zip(*baseline_samples)]
-            print(f"Sensor baseline (average of {required_samples} samples): {self.sensor_baseline}")
-        else:
-            print("Failed to collect enough valid sensor samples for baseline.")
-    '''
     def connect_hw(self, event=None):
         successful = True
 
@@ -247,7 +224,6 @@ class BasalGanglia:
             try:
                 self.ser_sensor.open()
                 print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
-                #self.determine_sensor_baselines()
 
             except Exception:
                 try:
@@ -257,10 +233,9 @@ class BasalGanglia:
                         timeout=1           # Timeout for read in seconds
                     )
                     print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
-                    #self.determine_sensor_baselines()
                     
                 except Exception as e:
-                    #successful = False
+                    successful = False
                     print(f"Serial connection to sensors failed due to exception: {e}")
             
             # Define serial connection via bluetooth to exoskeleton
@@ -276,7 +251,7 @@ class BasalGanglia:
                     )
                     print(f"Serial connection to exoskeleton established on port {self.ser_exo.port}")
                 except Exception as e:
-                    #successful = False
+                    successful = False
                     print(f"Serial connection to exoskeleton failed due to exception: {e}")
         else:
             try:
@@ -294,7 +269,6 @@ class BasalGanglia:
     def read_sensor_data(self, duration=5):
         self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
         self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
-        #print("Reading sensor data...")
         start_time = time.time()
         while time.time() - start_time < duration:
             if self.ser_sensor.in_waiting > 0:
@@ -306,7 +280,6 @@ class BasalGanglia:
                 except ValueError:
                     print(f"Ignored malformed line: {line}")
             time.sleep(0.01)  # ~100 Hz sampling
-        #print("Sensor data collection complete.")
     
     def analyze_sensor_data_flex(self, alpha=0.8, flexion_threshold=30, extension_threshold=30):
         try:
@@ -491,38 +464,37 @@ class BasalGanglia:
                     self.buttons[f'probability_{name}'].set_text(f'{avg_prob:.1%}')
     
     def generate_action_command(self):
-        bit_to_actuator = {
-            0: 4,   # Thumb oppositor
-            1: 1,   # Thumb flexor
-            2: 6,   # Index flexor
-            3: 8,   # Middle flexor
-            4: 10,  # Ring flexor
-            5: 12   # Pinky flexor
-        }
 
         action_command = ''
         if self.loops[0].selected_action:
             action_bits = self.loops[0].selected_action[0]  
             factor = 2
-            duration = factor * self.loops[0].selected_action[1]   
+            duration_flexors = factor * self.loops[0].selected_action[1]   
 
             action_command_parts = []
 
+            # Control all actuators
+            for actuator in self.actuators_extensors + self.actuators_flexors:
+                action_command_parts.append(f"0-{actuator}-i")
+            for actuator in self.actuators_extensors + self.actuators_flexors:
+                action_command_parts.append(f"{self.duration_actuators*1000}-{actuator}-h")
+
+            # Control individual flexors based on selected action
             for i, bit in enumerate(action_bits):
                 if bit == '1':
-                    actuator = bit_to_actuator[i]
-                    # Inlet at time 0
-                    action_command_parts.append(f"0-{actuator}-i")
+                    flexor = self.actuators_flexors[i]
+                    # Inlet position
+                    action_command_parts.append(f"{(self.duration_actuators+self.delay)*1000}-{flexor}-i")
 
             for i, bit in enumerate(action_bits):
                 if bit == '1':
-                    actuator = bit_to_actuator[i]
-                    # Hold at the specified duration
-                    action_command_parts.append(f"{duration*1000}-{actuator}-h")
+                    flexor = self.actuators_flexors[i]
+                    # Hold position
+                    action_command_parts.append(f"{(self.duration_actuators+self.delay+duration_flexors)*1000}-{flexor}-h")
 
             action_command = '/'.join(action_command_parts) + '/'
         
-        return action_command, duration
+        return action_command, duration_flexors
 
     def perform_action(self):
         duration = 0
@@ -535,14 +507,14 @@ class BasalGanglia:
                 self.ser_sensor.flushInput() # delete values in serial input buffer
         
 
-                print(f"Perform action: {self.loops[0].selected_action[0]} for {duration}s → Command: {action_command}")
+                print(f"Perform action: {self.loops[0].selected_action[0]} for {duration}s")
                 self.ser_exo.write(action_command.encode())
                 time.sleep(2)
 
                 self.ser_exo.write(start_stop_command.encode())
-                self.read_sensor_data(duration=duration+1)
+                self.read_sensor_data(duration=duration+2)
                 self.ser_exo.write(start_stop_command.encode())
-                time.sleep(1)
+                time.sleep(2)
                 
         except Exception as e: print(e)
         return duration
@@ -581,7 +553,7 @@ class BasalGanglia:
                     loop.analyze_thalamus_activation_time(current_time=h.t)
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s analyze_thalamus_activation_time {loop.name}")
                     time_step = time.time()
-                    loop.select_action(current_time=h.t)
+                    loop.select_action()
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s select_action {loop.name}")
                 
                 if self.hw_connected:
@@ -617,24 +589,24 @@ class BasalGanglia:
                 print(f"Loop took {duration:.6f} s")
             
         except KeyboardInterrupt:
-                print("\nCtrl-C pressed. Storing data...")
-                plt.close()
-                if self.hw_connected:
-                    try:
-                        self.ser_sensor.close()
-                    except Exception: None
-                    try:
-                        release_command = ''
-                        for actuator in range(1,14):
-                            release_command += f'0-{actuator}-o/'
-                        self.ser_exo.write(release_command.encode())
-                        time.sleep(2)
-                        self.ser_exo.write('S'.encode())
-                        time.sleep(2)
-                        self.ser_exo.write('S'.encode())
-                        time.sleep(2)
-                        self.ser_exo.close()
-                    except Exception: None
+            print("\nCtrl-C pressed. Storing data...")
+            plt.close()
+            if self.hw_connected:
+                try:
+                    self.ser_sensor.close()
+                except Exception: None
+                try:
+                    release_command = ''
+                    for actuator in range(1,14):
+                        release_command += f'0-{actuator}-o/'
+                    self.ser_exo.write(release_command.encode())
+                    time.sleep(2)
+                    self.ser_exo.write('S'.encode())
+                    time.sleep(2)
+                    self.ser_exo.write('S'.encode())
+                    time.sleep(2)
+                    self.ser_exo.close()
+                except Exception: None
 
         finally:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -657,7 +629,6 @@ class BasalGangliaLoop:
         self.actions_names = output
         self.actions = [''.join(bits) for bits in product('10', repeat=len(output)) if any(bit == '1' for bit in bits)] # binary combination of all outputs
         self.selected_action = None
-        #self.performed_action = None
         if actions_to_plot is not None:
             self.actions_to_plot = len(self.actions) if len(self.actions) <= actions_to_plot else actions_to_plot
         self.binary_input = binary_input
@@ -746,9 +717,6 @@ class BasalGangliaLoop:
         self.buttons = {}
         self.rates = {}
         self.rates_rel = {}
-
-        # HW
-        self.sensor_threshold = 20#0.2
 
         self._init_cells()
         self._init_spike_detectors()
@@ -1153,39 +1121,44 @@ class BasalGangliaLoop:
     def analyze_thalamus_activation_time(self, current_time):
         self.activation_times.append(int(current_time))
 
-        rates = {}
-        window_start = np.array(self.t_vec.to_python())[-1] - self.plot_interval
-        window_end = np.array(self.t_vec.to_python())[-1]
-        window_duration_sec = (window_end - window_start) / 1000.0  # Convert ms to seconds
-
-        for action_id, action in enumerate(self.actions):
-            # Collect all thalamic spike times for this action
-            all_spikes = []
-            for k in range(self.cell_types_numbers['Thal'][1]):
-                spikes = np.array(self.spike_times['Thal'][action_id][k].to_python())
-                all_spikes.extend(spikes)
-
-            # Filter spikes within the last window
-            spikes_in_window = [spk for spk in all_spikes if window_start < spk <= window_end]
-
-            # Compute firing rate: total spikes / (number of cells * window duration)
-            num_cells = self.cell_types_numbers['Thal'][1]
-            rate = len(spikes_in_window) / (num_cells * window_duration_sec) if window_duration_sec > 0 else 0
-            rates[action] = rate
-
-        # Find the action with the highest thalamus firing rate
-        if rates:
-            max_value = max(rates.values())
-            candidates = [action for action, value in rates.items() if value == max_value]
-            best_action = random.choice(candidates)
+        if set(self.selected_goal) == {'0'}:
+            # Store 0 for all actions
+            for action in self.actions:
+                self.activation_over_time[action].append(0)
         else:
-            best_action = None
+            rates = {}
+            window_start = np.array(self.t_vec.to_python())[-1] - self.plot_interval
+            window_end = np.array(self.t_vec.to_python())[-1]
+            window_duration_sec = (window_end - window_start) / 1000.0  # Convert ms to seconds
 
-        # Store 1 for the best action, 0 for the rest
-        for action in self.actions:
-            self.activation_over_time[action].append(1 if action == best_action else 0)
+            for action_id, action in enumerate(self.actions):
+                # Collect all thalamic spike times for this action
+                all_spikes = []
+                for k in range(self.cell_types_numbers['Thal'][1]):
+                    spikes = np.array(self.spike_times['Thal'][action_id][k].to_python())
+                    all_spikes.extend(spikes)
+
+                # Filter spikes within the last window
+                spikes_in_window = [spk for spk in all_spikes if window_start < spk <= window_end]
+
+                # Compute firing rate: total spikes / (number of cells * window duration)
+                num_cells = self.cell_types_numbers['Thal'][1]
+                rate = len(spikes_in_window) / (num_cells * window_duration_sec) if window_duration_sec > 0 else 0
+                rates[action] = rate
+
+            # Find the action with the highest thalamus firing rate
+            if rates:
+                max_value = max(rates.values())
+                candidates = [action for action, value in rates.items() if value == max_value]
+                best_action = random.choice(candidates)
+            else:
+                best_action = None
+
+            # Store 1 for the best action, 0 for the rest
+            for action in self.actions:
+                self.activation_over_time[action].append(1 if action == best_action else 0)
   
-    def select_action(self, current_time):
+    def select_action(self):
         active_actions = [(i, activations[-1]) for i, activations in self.activation_over_time.items() if activations[-1] > 0]
         if active_actions and self.selected_goal and set(self.selected_goal) != {'0'}:
             # Pick the action with the maximum last activation value
@@ -1221,13 +1194,14 @@ class BasalGangliaLoop:
                 
             current_expected_reward = self.expected_reward_over_time[goal][-1]
             self.dopamine_over_time[goal].append(round(self.reward_over_time[goal][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
-            '''
+            
+            #'''
             for action in self.actions:
                 if self.reward_over_time[goal][-1] - current_expected_reward > 0:
                     self.SNc_burst(event=None, action=action)
                 elif self.reward_over_time[goal][-1] - current_expected_reward < 0:
                     self.SNc_dip(event=None, action=action)
-            '''
+            #'''
         
             if goal == self.selected_goal:
                 #For selected goal update expected reward based on actual reward
@@ -1484,9 +1458,7 @@ def create_stim(cell, start=0, number=1e9, interval=10, weight=2, noise=0):
     return stim, syn, nc
 
 def create_goal_action_table(indices_mapping, goals, actions):
-
     goal_action_table = {}
-
     all_goal_combinations = [''.join(bits) for bits in product("01", repeat=len(goals))]
 
     for goal_combo in all_goal_combinations:

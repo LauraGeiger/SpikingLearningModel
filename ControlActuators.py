@@ -1,8 +1,33 @@
+
 import serial
 import time
 
+# Valve - Actuators
+#  1 - Thumb flexor
+#  2 - Thumb extensor
+#  3 - Thumb abductor
+#  4 - Thumb oppositor
+#  5 - Wrist dorsifl
+#  6 - Index finger flexor
+#  7 - Index finger extensor
+#  8 - Middle finger flexor
+#  9 - Middle finger extensor
+# 10 - Ring finger flexor
+# 11 - Ring finger extensor
+# 12 - Pinky finger flexor
+# 13 - Pinky finger extensor
+
+time1 = 1000
+time2 = 1400
+time3 = 3000
+time4 = 5000
+time5 = 7000
 commands = [
-        '0-4-i/1000-6-h/', #'0-1-i/0-6-i/0-13-i/0-9-i/0-11-i/3250-1-o/3250-6-o/3250-13-o/3250-9-o/3250-11-o/',
+         f'{time1}-1-i/{time1}-2-i/{time1}-3-i/{time1}-4-i/{time1}-7-i/{time1}-6-i/{time1}-13-i/{time1}-12-i/{time1}-9-i/{time1}-8-i/{time1}-11-i/{time1}-10-i/'
+        +f'{time2}-1-h/{time2}-2-h/{time2}-3-h/{time2}-4-h/{time2}-7-h/{time2}-6-h/{time2}-13-h/{time2}-12-h/{time2}-9-h/{time2}-8-h/{time2}-11-h/{time2}-10-h/'
+        +f'{time3}-1-i/{time3}-4-i/{time3}-6-i/'
+        +f'{time4}-4-h/'
+        +f'{time5}-1-h/{time5}-6-h/',
         'S'
     ]
 index = 0
