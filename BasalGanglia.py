@@ -121,8 +121,13 @@ class BasalGanglia:
             ax_loops = self.axs_loops[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
             ax_loops.text(0.5, 0.5, f'{loop.name}', rotation=90, ha='center', va='center', transform=ax_loops.transAxes)
             label_text = '\n'.join(loop.name.split())
-            self.buttons[f'{label_text}'] = TextBox(ax_loops, label='', textalignment='center')
-
+            self.buttons[f'{label_text}'] = Button(ax_loops, label='')#, textalignment='center')
+            
+            if idx == 0: # Motor loop
+                self.buttons[f'{label_text}'].on_clicked(self.learn_from_motor_babbling)
+            else: # Premotor loop
+                self.buttons[f'{label_text}'].on_clicked(self.learn_from_demonstration)
+            
             # Init probabilities
             self.axs_probabilities[idx] = self.fig.add_subplot(self.gs_probabilities[self.gs_probabilities.nrows - 2 - idx])
             self.axs_probabilities[idx].set_axis_off()
@@ -265,6 +270,20 @@ class BasalGanglia:
         if successful:
             self.hw_connected = not self.hw_connected
             self.buttons['hw'].label.set_text('Disconnect\nHW' if self.hw_connected else 'Connect HW')
+
+    def learn_from_motor_babbling(self,event):
+        for trial in range(10):
+            if self.hw_connected:
+                random_action = random.choice(self.loops[0].actions)
+                self.perform_action(random_action)
+                if self.recorded_sensor_data_flex: 
+                    self.analyze_sensor_data_flex()
+                    print(f"Detected action {self.performed_action}")
+                self.update_selections()
+                self.loops[0].update_weights(current_time=h.t, goal=self.performed_action, action=random_action)
+                self.loops[0].update_plots(current_time=h.t)
+
+    def learn_from_demonstration(self): None
 
     def read_sensor_data(self, duration=5):
         self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
@@ -463,14 +482,20 @@ class BasalGanglia:
                 if self.buttons.get(f'probability_{name}'):
                     self.buttons[f'probability_{name}'].set_text(f'{avg_prob:.1%}')
     
-    def generate_action_command(self):
-
+    def generate_action_command(self, action=None):
         action_command = ''
-        if self.loops[0].selected_action:
-            action_bits = self.loops[0].selected_action[0]  
-            factor = 2
-            duration_flexors = factor * self.loops[0].selected_action[1]   
+        factor = 2
+        duration_flexors = 0
 
+        if action:
+            duration_flexors = factor
+        else:
+            if self.loops[0].selected_action:
+                action = self.loops[0].selected_action[0]  
+                
+                duration_flexors = factor * self.loops[0].selected_action[1]   
+        
+        if duration_flexors:
             action_command_parts = []
 
             # Control all actuators
@@ -480,13 +505,13 @@ class BasalGanglia:
                 action_command_parts.append(f"{self.duration_actuators*1000}-{actuator}-h")
 
             # Control individual flexors based on selected action
-            for i, bit in enumerate(action_bits):
+            for i, bit in enumerate(action):
                 if bit == '1':
                     flexor = self.actuators_flexors[i]
                     # Inlet position
                     action_command_parts.append(f"{(self.duration_actuators+self.delay)*1000}-{flexor}-i")
 
-            for i, bit in enumerate(action_bits):
+            for i, bit in enumerate(action):
                 if bit == '1':
                     flexor = self.actuators_flexors[i]
                     # Hold position
@@ -496,28 +521,28 @@ class BasalGanglia:
         
         return action_command, duration_flexors
 
-    def perform_action(self):
+    def perform_action(self, action=None):
         duration = 0
-        try:
-            # Perform selected action of motor loop
+        if action: # used for motor babbling
+            action_command, duration = self.generate_action_command(action)
+            print(f"Perform action: {action} for {duration}s")
+            
+        else:
             if self.loops[0].selected_action:
                 action_command, duration = self.generate_action_command()
-                start_stop_command = 'S'
-
-                self.ser_sensor.flushInput() # delete values in serial input buffer
-        
-
                 print(f"Perform action: {self.loops[0].selected_action[0]} for {duration}s")
-                self.ser_exo.write(action_command.encode())
-                time.sleep(2)
+            
+        if duration: # perform action
+            start_stop_command = 'S'
+            self.ser_sensor.flushInput() # delete values in serial input buffer
+    
+            self.ser_exo.write(action_command.encode())
+            time.sleep(2)
 
-                self.ser_exo.write(start_stop_command.encode())
-                self.read_sensor_data(duration=duration+2)
-                self.ser_exo.write(start_stop_command.encode())
-                time.sleep(2)
-                
-        except Exception as e: print(e)
-        return duration
+            self.ser_exo.write(start_stop_command.encode())
+            self.read_sensor_data(duration=duration+2)
+            self.ser_exo.write(start_stop_command.encode())
+            time.sleep(2)
 
     def run_simulation(self):
         try:
@@ -557,7 +582,7 @@ class BasalGanglia:
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s select_action {loop.name}")
                 
                 if self.hw_connected:
-                    duration = self.perform_action()
+                    self.perform_action()
                     if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
                     if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
                     self.update_selections()
@@ -1209,17 +1234,23 @@ class BasalGangliaLoop:
             else:
                 self.expected_reward_over_time[goal].append(self.expected_reward_over_time[goal][-1])
 
-    def update_weights(self, current_time):
+    def update_weights(self, current_time, goal=None, action=None):
         # Analyze firing rates
-        #self.rates['SNc'], self.rates_rel['SNc'] = self.analyze_firing_rate('SNc', window=self.plot_interval)
         self.rates['MSNd'], self.rates_rel['MSNd'] = self.analyze_firing_rate('MSNd', window=self.plot_interval, average=False)
         self.rates['MSNi'], self.rates_rel['MSNi'] = self.analyze_firing_rate('MSNi', window=self.plot_interval, average=False)
 
         self.weight_times.append(int(current_time))
-        # Only update weights for the selected goal and action
-        if self.selected_goal and self.selected_action:
+        goal_id = None
+        action_id = None
+        if goal and action: # used for pretraining
+            goal_id = self.goals.index(goal)
+            action_id = self.actions.index(action)
+        elif self.selected_goal and self.selected_action:
             goal_id = self.goals.index(self.selected_goal)
             action_id = self.actions.index(self.selected_action[0])
+
+        # Only update weights for the selected goal and action
+        if goal_id and action_id:
             for cor_id in range(self.cell_types_numbers['Cor'][1]):
                 for ct in self.weight_cell_types:
                     for msn_id in range(self.cell_types_numbers[ct][1]):
@@ -1552,7 +1583,7 @@ def create_BasalGanglia(no_of_joints=3):
     bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
     BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
-create_BasalGanglia(no_of_joints=4)
+create_BasalGanglia(no_of_joints=6)
 
 
 
