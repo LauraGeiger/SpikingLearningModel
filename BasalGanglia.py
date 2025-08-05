@@ -47,9 +47,11 @@ class BasalGanglia:
         self.num_flex_sensors = 6
         self.num_touch_sensors = 5
         self.actuators_flexors = [4, 1, 6, 8, 10, 12]
+        if len(self.loops[0].actions_names) < 4:
+            self.actuators_flexors = self.actuators_flexors[1:1+len(self.loops[0].actions_names)]
         #random.shuffle(self.actuators_flexors)
         self.actuators_extensors = [2, 7, 9, 11, 13]
-        self.duration_actuators = 0.4 # s
+        self.duration_actuators = 0.3 # s
         self.delay = 0.5 # s
 
         self._init_loops()
@@ -271,17 +273,27 @@ class BasalGanglia:
             self.hw_connected = not self.hw_connected
             self.buttons['hw'].label.set_text('Disconnect\nHW' if self.hw_connected else 'Connect HW')
 
-    def learn_from_motor_babbling(self,event):
-        for trial in range(10):
-            if self.hw_connected:
-                random_action = random.choice(self.loops[0].actions)
-                self.perform_action(random_action)
-                if self.recorded_sensor_data_flex: 
-                    self.analyze_sensor_data_flex()
-                    print(f"Detected action {self.performed_action}")
-                self.update_selections()
-                self.loops[0].update_weights(current_time=h.t, goal=self.performed_action, action=random_action)
-                self.loops[0].update_plots(current_time=h.t)
+    def learn_from_motor_babbling(self, event):
+        if self.hw_connected:
+            previous_action = None
+            previous_performed_action = None
+            
+            for action in self.loops[0].actions:
+                for trial in range(2):
+                    h.continuerun(h.t + self.plot_interval)
+                    #action = random.choice(self.loops[0].actions)
+                    self.perform_action(action)
+                    if self.recorded_sensor_data_flex: 
+                        self.analyze_sensor_data_flex()
+                    self.update_selections()
+                    if previous_action and previous_performed_action:
+                        self.loops[0].update_weights(current_time=h.t, goal=previous_performed_action, action=previous_action)
+                        self.loops[0].update_plots(current_time=h.t, goal=previous_performed_action, action=previous_action)
+                    
+                    self.loops[0].cortical_input_stimuli(current_time=h.t, goal=self.performed_action)
+                    previous_action = action
+                    previous_performed_action = self.performed_action
+                time.sleep(1)
 
     def learn_from_demonstration(self): None
 
@@ -327,6 +339,9 @@ class BasalGanglia:
 
                     prev_filtered[i] = filtered
 
+            if len(self.loops[0].actions_names) < 4:
+                self.flexion_detected = self.flexion_detected[1:1+len(self.loops[0].actions_names)]
+            '''
             # Print results
             print("\nFlexion and Extension Detection Results:")
             for i in range(self.num_flex_sensors):
@@ -342,6 +357,7 @@ class BasalGanglia:
                     f"{'👈 Extension' if extend else ''} "
                     f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
                 )
+            '''
             self.performed_action = ''.join(['1' if value else '0' for value in self.flexion_detected])
             print(f"performed action = {self.performed_action}")
         except Exception as e: print(e)
@@ -371,6 +387,7 @@ class BasalGanglia:
                     prev_filtered[i] = filtered
 
             # Print results
+            '''
             print("\nTouch Detection Results:")
             for i in range(self.num_touch_sensors):
                 baseline = start_filtered[i]
@@ -383,6 +400,7 @@ class BasalGanglia:
                     f"{'👉 Touch' if touch else '   '} "
                     f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
                 )
+            '''
         except Exception as e: print(e)
 
     def update_selections(self, frame=None):
@@ -1133,13 +1151,15 @@ class BasalGangliaLoop:
     def update_selected_goal(self):
         self.selected_goal = ''.join('1' if val != 0 else '0' for val in self.cortical_input_dur_rel)
 
-    def cortical_input_stimuli(self, current_time):
-        selected_goal_index = self.goals.index(self.selected_goal)
-
+    def cortical_input_stimuli(self, current_time, goal=None):
+        selected_goal = goal if goal else self.selected_goal
+        selected_goal_index = self.goals.index(selected_goal)
+        print(f"cort stim at {current_time} for goal {goal} with index {selected_goal_index}")
+        
         for idx, _ in enumerate(self.goals):
             h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=idx, active=False)) # stop all cortical input stimuli
         
-        if set(self.selected_goal) != {'0'}: # Only stimulate cortex if a goal is set
+        if set(selected_goal) != {'0'}: # Only stimulate cortex if a goal is set
             h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=True)) # start particular cortical input stimulus
             h.cvode.event(current_time + self.plot_interval, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=selected_goal_index, active=False)) # stop particular cortical input stimulus
 
@@ -1204,7 +1224,7 @@ class BasalGangliaLoop:
         goal_state = tuple((goal_name, dur != 0) for goal_name, dur in zip(self.goals_names, self.cortical_input_dur_rel))
         target_actions = self.goal_action_table.get(goal_state, {})
         target_action_indices = ''.join('1' if v else '0' for v in target_actions.values())
-        
+        print(f"target actions = {target_actions} target action indices = {target_action_indices} performed action = {performed_action}")
         for goal in self.goals:
             action_indices = None
             if hw_connected and not self.child_loop and performed_action:
@@ -1270,15 +1290,22 @@ class BasalGangliaLoop:
             if len(self.weights_over_time[key]) < len(self.weight_times):
                 self.weights_over_time[key].append(self.weights_over_time[key][-1])
 
-    def update_plots(self, current_time):
-        selected_goal_index = self.goals.index(self.selected_goal)
+    def update_plots(self, current_time, goal=None, action=None):
+        if goal:
+            selected_goal_index = self.goals.index(goal)
+        else:
+            selected_goal_index = self.goals.index(self.selected_goal)
         
-        # Determine actions to plot (dynamic)
-        last_active_indices = { 
-            action: (len(act) - 1 - next(i for i, v in enumerate(reversed(act)) if v) if any(act) else -1)
-            for action, act in self.activation_over_time.items()}
-        sorted_by_recent = sorted(self.actions, key=lambda a: last_active_indices[a], reverse=True)
-        actions_to_plot_now = sorted_by_recent[:self.actions_to_plot]
+        if action:
+            sorted_by_recent = [action]+[a for a in self.actions if a is not action]
+            actions_to_plot_now = sorted_by_recent[:self.actions_to_plot]
+        else:
+            # Determine actions to plot (dynamic)
+            last_active_indices = { 
+                action: (len(act) - 1 - next(i for i, v in enumerate(reversed(act)) if v) if any(act) else -1)
+                for action, act in self.activation_over_time.items()}
+            sorted_by_recent = sorted(self.actions, key=lambda a: last_active_indices[a], reverse=True)
+            actions_to_plot_now = sorted_by_recent[:self.actions_to_plot]
 
         # Update plots
         for plot_id, action in enumerate(actions_to_plot_now):
@@ -1533,8 +1560,9 @@ ms_to_s = FuncFormatter(lambda x, _: f'{x/1000}' if x % 100 == 0 else '')
 #--- Basal Ganglia ---------------------------------------------------------------------------------------------------------------------------------------------------#
 
 def create_BasalGanglia(no_of_joints=3):
+    grasp_types = ["Precision pinch", "Power grasp"]
     if no_of_joints == 4:
-        grasp_types = ["Precision pinch", "Power grasp"]
+        
         joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Remaining fingers flexion"]
         #actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Remaining fingers flexor"]
         actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Middle finger flexor", "Ring finger flexor", "Pinky finger flexor"]
@@ -1548,9 +1576,7 @@ def create_BasalGanglia(no_of_joints=3):
         }
 
     elif no_of_joints == 6:
-        grasp_types = ["Precision pinch", "Power grasp"]
         joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
-        #actuators = ["Thumb oppositor", "Thumb abductor", "Thumb flexor", "Thumb extensor", "Index finger flexor", "Index finger extensor", "Middle finger flexor", "Middle finger extensor", "Ring finger flexor", "Ring finger extensor", "Pinky finger flexor", "Pinky finger extensor"]
         actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Middle finger flexor", "Ring finger flexor", "Pinky finger flexor"]
         grasp_type_joint_indices_mapping = {"10": "111000", # Precision pinch
                                             "01": "111111"} # Power grasp
@@ -1563,8 +1589,7 @@ def create_BasalGanglia(no_of_joints=3):
             5: [5]
         }
         
-    else:
-        grasp_types = ["Precision pinch", "Power grasp"]
+    elif no_of_joints == 3:
         joints = ["Thumb flexion", "Index finger flexion", "Middle finger flexion"]
         actuators = ["Thumb flexor", "Index finger flexor", "Middle finger flexor"]
         grasp_type_joint_indices_mapping = {"10": "110", # Precision pinch
@@ -1575,6 +1600,16 @@ def create_BasalGanglia(no_of_joints=3):
             2: [2]
         }
 
+    elif no_of_joints == 2:
+        joints = ["Thumb flexion", "Index finger flexion"]
+        actuators = ["Thumb flexor", "Index finger flexor"]
+        grasp_type_joint_indices_mapping = {"10": "11", # Precision pinch
+                                            "01": "11"} # Power grasp
+        joint_actuator_indices = {
+            0: [0],
+            1: [1]
+        }
+
     grasp_type_joint_table = create_goal_action_table(indices_mapping=grasp_type_joint_indices_mapping, goals=grasp_types, actions=joints)
     joint_actuator_indices_mapping = create_goal_action_indices_mapping(indices=joint_actuator_indices, goals=joints, actions=actuators)
     joint_actuator_table = create_goal_action_table(indices_mapping=joint_actuator_indices_mapping, goals=joints, actions=actuators)
@@ -1583,7 +1618,7 @@ def create_BasalGanglia(no_of_joints=3):
     bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
     BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
-create_BasalGanglia(no_of_joints=6)
+create_BasalGanglia(no_of_joints=2)
 
 
 
