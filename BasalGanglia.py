@@ -152,8 +152,9 @@ class BasalGanglia:
                 for i, name in enumerate(loop.actions_names):
                     self.axs_selections[idx][i].set_axis_off() 
                     ax_selections = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
-                    label_text = '\n'.join(name.split())
-                    self.buttons[f'{name}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
+                    label_text = '\n'.join(f"Actuator {i+1}".split())
+                    #label_text = '\n'.join(name.split())
+                    self.buttons[f'Actuator {i+1}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
 
                 # Plot a horizontal bar with width=prob
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
@@ -181,6 +182,7 @@ class BasalGanglia:
                     self.buttons[f'{name}'] = Button(ax_selections, label=f'{label_text}', color='None', hovercolor='lightgray')
                     self.buttons[f'{name}'].on_clicked(lambda event, loop=loop, i=i: self.update_goals(loop, i))
                     self.buttons[f'probability_{name}'] = ax_selections.text(0.5, 0.03, '', ha='center')
+                    self.buttons[f'sensor_flexion_{name}'] = ax_selections.text(0.5, 0.9, '', ha='center')
             
             if idx == 1:
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
@@ -285,7 +287,7 @@ class BasalGanglia:
                     self.perform_action(action)
                     if self.recorded_sensor_data_flex: 
                         self.analyze_sensor_data_flex()
-                    self.update_selections()
+                    self.update_GUI_goals_actions()
                     if previous_action and previous_performed_action:
                         self.loops[0].update_weights(current_time=h.t, goal=previous_performed_action, action=previous_action)
                         self.loops[0].update_plots(current_time=h.t, goal=previous_performed_action, action=previous_action)
@@ -313,7 +315,10 @@ class BasalGanglia:
             time.sleep(0.01)  # ~100 Hz sampling
     
     def analyze_sensor_data_flex(self, alpha=0.8, flexion_threshold=30, extension_threshold=30):
-        try:
+        #try:
+        if len(self.recorded_sensor_data_flex[0]) < self.num_flex_sensors:
+            print("Not enough data from flex sensors")
+        else:
             prev_filtered = [self.recorded_sensor_data_flex[0][i] for i in range(self.num_flex_sensors)]
             start_filtered = prev_filtered.copy()
             max_filtered = prev_filtered.copy()
@@ -341,10 +346,21 @@ class BasalGanglia:
 
             if len(self.loops[0].actions_names) < 4:
                 self.flexion_detected = self.flexion_detected[1:1+len(self.loops[0].actions_names)]
+                max_filtered = max_filtered[1:1+len(self.loops[0].actions_names)]
+                start_filtered = start_filtered[1:1+len(self.loops[0].actions_names)]
+                min_filtered = min_filtered[1:1+len(self.loops[0].actions_names)]
+
+            for i, name in enumerate(self.loops[0].goals_names):
+                flex = self.flexion_detected[i]
+                extend = self.extension_detected[i]
+                delta_up = max_filtered[i] - start_filtered[i]
+                delta_down = start_filtered[i] - min_filtered[i]
+                text = f"{delta_up:.2f} {'Flexion' if flex else ''}"
+                self.buttons[f'sensor_flexion_{name}'].set_text(text)
             '''
             # Print results
             print("\nFlexion and Extension Detection Results:")
-            for i in range(self.num_flex_sensors):
+            for i in range(len(self.loops[0].actions_names)):
                 baseline = start_filtered[i]
                 flex = self.flexion_detected[i]
                 extend = self.extension_detected[i]
@@ -360,10 +376,13 @@ class BasalGanglia:
             '''
             self.performed_action = ''.join(['1' if value else '0' for value in self.flexion_detected])
             print(f"performed action = {self.performed_action}")
-        except Exception as e: print(e)
+        #except Exception as e: print(e)
 
     def analyze_sensor_data_touch(self, alpha=0.8, touch_threshold=20, window=30):
-        try:
+        #try:
+        if len(self.recorded_sensor_data_touch[0]) < self.num_touch_sensors:
+            print("Not enough data from touch sensors")
+        else:
             prev_filtered = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
             start_filtered = prev_filtered.copy()
             max_filtered = prev_filtered.copy()
@@ -401,39 +420,69 @@ class BasalGanglia:
                     f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
                 )
             '''
-        except Exception as e: print(e)
+        #except Exception as e: print(e)
 
-    def update_selections(self, frame=None):
-        self.iteration = int(h.t / self.plot_interval)
-        
+    def update_GUI_goals_actions(self, frame=None): 
+        #print(f"{h.t} update_GUI_goals_actions")       
         for idx, loop in enumerate(self.loops):
             if loop.selected_goal:
                 visibility = False if set(loop.selected_goal) == {'0'} else True
                 self.update_probability(loop_id=idx, probability=loop.expected_reward_over_time[loop.selected_goal][-1], visibility=visibility)
 
-            if idx == 0:
+            if not loop.child_loop:
                 for i, name in enumerate(loop.actions_names):
                     if loop.selected_goal:
                         char = '0'
-                        if self.hw_connected and self.performed_action:
-                            char = self.performed_action[i]
-                        elif loop.selected_action:
+                        if loop.selected_action:
                             char = loop.selected_action[0][i]
                         selected = char == '1'
                         reward = loop.reward_over_time[loop.selected_goal][-1]
-                        self.highlight_textbox(name, selected, reward)
+                        #self.highlight_textbox(name, selected, reward)
+                        self.highlight_textbox(f"Actuator {i+1}", selected, reward)
+            for i, name in enumerate(loop.goals_names):
+                #if not loop.child_loop: 
+                    #self.buttons[f'sensor_flexion_{name}'].set_text('') # reset sensor reading
+                if loop.selected_goal:
+                    char = loop.selected_goal[i]
+                    selected = char == '1'
+                    reward = None
+                    
+                    if idx < len(self.loops) - 1:
+                        if self.loops[idx+1].selected_goal:
+                            reward = self.loops[idx+1].reward_over_time[self.loops[idx+1].selected_goal][-1]
+                    
+                    self.highlight_textbox(name, selected, reward)
+                    
+                    if selected: self.update_goal_probability(name, loop, probability=loop.expected_reward_over_time[loop.selected_goal][-1]) 
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
+        
+    def update_GUI_performed_action_reward(self, frame=None):
+        #print(f"{h.t} update_GUI_performed_action_reward")
+        self.iteration = int(h.t / self.plot_interval)
+        
+        for idx, loop in enumerate(self.loops):
+            if not loop.child_loop:
+                for i, name in enumerate(loop.actions_names):
+                    if loop.selected_goal:
+                        char = '0'
+                        if loop.selected_action:
+                            char = loop.selected_action[0][i]
+                        selected = char == '1'
+                        reward = loop.reward_over_time[loop.selected_goal][-1]
+                        if reward: 
+                            self.highlight_textbox(f"Actuator {i+1}", selected, reward)
             for i, name in enumerate(loop.goals_names):
                 if loop.selected_goal:
                     char = loop.selected_goal[i]
                     selected = char == '1'
                     reward = None
+                    
                     if idx < len(self.loops) - 1:
                         if self.loops[idx+1].selected_goal:
                             reward = self.loops[idx+1].reward_over_time[self.loops[idx+1].selected_goal][-1]
                     self.highlight_textbox(name, selected, reward)
                     
-                    if selected: self.update_goal_probability(name, loop, probability=loop.expected_reward_over_time[loop.selected_goal][-1])
-            
             # Get reward for currently selected goal
             if loop.selected_goal:
                 current_reward = loop.reward_over_time[loop.selected_goal][-1]
@@ -447,8 +496,10 @@ class BasalGanglia:
         # Update axes limits dynamically
         max_iter = max(rl['xdata'][-1] for rl in self.reward_lines.values() if rl['xdata'])
         self.ax_reward.set_xlim(0, max(10, max_iter + 1))
-    
-    def highlight_textbox(self, name, selected, reward):
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
+        
+    def highlight_textbox(self, name, selected, reward=None):
         if selected:
             if reward:
                 self.buttons[f'{name}'].ax.set_facecolor('tab:olive')
@@ -459,7 +510,7 @@ class BasalGanglia:
         else:
             self.buttons[f'{name}'].ax.set_facecolor(rcParams['axes.facecolor'])
             self.buttons[f'{name}'].color = 'None'
-
+   
     def update_goals(self, loop, goal_idx):
         if loop.selected_goal:
             value = loop.selected_goal[goal_idx]=='0'
@@ -467,7 +518,7 @@ class BasalGanglia:
             value = 1
         loop.buttons[f'cor_dur_slider{goal_idx}'].set_val(value)
         loop.update_cor_dur(val=value, goal_idx=goal_idx)
-        self.update_selections()
+        self.update_GUI_goals_actions()
 
     def update_probability(self, loop_id, probability, visibility):
         if visibility:
@@ -517,10 +568,10 @@ class BasalGanglia:
             action_command_parts = []
 
             # Control all actuators
-            for actuator in self.actuators_extensors + self.actuators_flexors:
-                action_command_parts.append(f"0-{actuator}-i")
-            for actuator in self.actuators_extensors + self.actuators_flexors:
-                action_command_parts.append(f"{self.duration_actuators*1000}-{actuator}-h")
+            #for actuator in self.actuators_extensors + self.actuators_flexors:
+            #    action_command_parts.append(f"0-{actuator}-i")
+            #for actuator in self.actuators_extensors + self.actuators_flexors:
+            #    action_command_parts.append(f"{self.duration_actuators*1000}-{actuator}-h")
 
             # Control individual flexors based on selected action
             for i, bit in enumerate(action):
@@ -578,8 +629,8 @@ class BasalGanglia:
 
                 # Update selections in basal ganglia overview plot
                 time_step = time.time()
-                self.update_selections()
-                if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_selections")
+                self.update_GUI_goals_actions()
+                if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_GUI_goals_actions")
 
                 for loop in self.loops:
                     if loop.selected_goal: loop.cortical_input_stimuli(current_time=h.t)
@@ -599,11 +650,12 @@ class BasalGanglia:
                     loop.select_action()
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s select_action {loop.name}")
                 
+                self.update_GUI_goals_actions()
                 if self.hw_connected:
                     self.perform_action()
                     if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
                     if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
-                    self.update_selections()
+                    
                     
                 for loop in self.loops:
                     time_step = time.time()
@@ -612,6 +664,7 @@ class BasalGanglia:
                 duration = time.time() - start_time_first_part
                 #print(f"{duration:.6f} s first part")
 
+                self.update_GUI_performed_action_reward()
                 # --- Weight and plot update ---# 
                 start_time_second_part = time.time()
                 for loop in self.loops:
@@ -630,6 +683,13 @@ class BasalGanglia:
 
                 duration = time.time() - start_time
                 print(f"Loop took {duration:.6f} s")
+
+                #time.sleep(1)
+                self.fig.canvas.draw_idle()
+                self.fig.canvas.flush_events()
+                for loop in self.loops:
+                    loop.fig.canvas.draw_idle()   
+                    loop.fig.canvas.flush_events()
             
         except KeyboardInterrupt:
             print("\nCtrl-C pressed. Storing data...")
@@ -733,7 +793,7 @@ class BasalGangliaLoop:
         self._is_updating_programmatically = False
         self.noise = 0
         self.n_spikes_SNc_burst = 5
-        self.learning_rate = 0.5 #0.1
+        self.learning_rate = 0.05 #0.1
         self.reward_times = []
         self.activation_times = []
         self.expected_reward_over_time = {}
@@ -1154,7 +1214,6 @@ class BasalGangliaLoop:
     def cortical_input_stimuli(self, current_time, goal=None):
         selected_goal = goal if goal else self.selected_goal
         selected_goal_index = self.goals.index(selected_goal)
-        print(f"cort stim at {current_time} for goal {goal} with index {selected_goal_index}")
         
         for idx, _ in enumerate(self.goals):
             h.cvode.event(current_time + 1, lambda: self.update_stimulus_activation(cell='Cor', stimulus=f'Cor', index=idx, active=False)) # stop all cortical input stimuli
@@ -1224,7 +1283,6 @@ class BasalGangliaLoop:
         goal_state = tuple((goal_name, dur != 0) for goal_name, dur in zip(self.goals_names, self.cortical_input_dur_rel))
         target_actions = self.goal_action_table.get(goal_state, {})
         target_action_indices = ''.join('1' if v else '0' for v in target_actions.values())
-        print(f"target actions = {target_actions} target action indices = {target_action_indices} performed action = {performed_action}")
         for goal in self.goals:
             action_indices = None
             if hw_connected and not self.child_loop and performed_action:
@@ -1262,20 +1320,27 @@ class BasalGangliaLoop:
         self.weight_times.append(int(current_time))
         goal_id = None
         action_id = None
+        selected_goal = None
+        selected_action = None
         if goal and action: # used for pretraining
-            goal_id = self.goals.index(goal)
-            action_id = self.actions.index(action)
+            selected_goal = goal
+            selected_action = action
         elif self.selected_goal and self.selected_action:
-            goal_id = self.goals.index(self.selected_goal)
-            action_id = self.actions.index(self.selected_action[0])
+            selected_goal = self.selected_goal
+            selected_action = self.selected_action[0]
+        if selected_goal:
+            goal_id = self.goals.index(selected_goal)
+        if selected_action:
+            action_id = self.actions.index(selected_action)
 
         # Only update weights for the selected goal and action
-        if goal_id and action_id:
+        if goal_id is not None and action_id is not None:
+            #print(f"Update weights for goal {selected_goal} with id {goal_id} and action {selected_action} with id {action_id} dopamine {self.dopamine_over_time[selected_goal][-1]}")
             for cor_id in range(self.cell_types_numbers['Cor'][1]):
                 for ct in self.weight_cell_types:
                     for msn_id in range(self.cell_types_numbers[ct][1]):
                         delta_w = 0
-                        delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[self.selected_goal][-1]
+                        delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[selected_goal][-1]
                         if ct == 'MSNd':
                             delta_w = delta_w
                         elif ct == 'MSNi':
@@ -1618,7 +1683,7 @@ def create_BasalGanglia(no_of_joints=3):
     bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
     BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
-create_BasalGanglia(no_of_joints=2)
+create_BasalGanglia(no_of_joints=3)
 
 
 
