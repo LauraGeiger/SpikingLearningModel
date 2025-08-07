@@ -13,12 +13,13 @@ from itertools import product
 from matplotlib.ticker import FuncFormatter
 
 # --- TODO --------------------------------------------------#
-# determine dopamine level from rel SNc rate
+# Determine dopamine level from rel SNc rate
 # How to store weights (especially from prefrontal loop)
 # Check transistion between grasping types (once learned, there shall be no dip in reward)
 # Check connections (other than cor-str) need to be fully connected
 # Check if the same neurons can be used across actions
 # Check if 5 neurons are required or if less are sufficient
+# Check if basal ganglia and cerebellum should get input from somatosensory cortex regions (such that sensor feedback can also lead to synaptic plasticity)
 # --- TODO --------------------------------------------------#
 
 
@@ -355,7 +356,7 @@ class BasalGanglia:
                 extend = self.extension_detected[i]
                 delta_up = max_filtered[i] - start_filtered[i]
                 delta_down = start_filtered[i] - min_filtered[i]
-                text = f"{delta_up:.2f} {'Flexion' if flex else ''}"
+                text = f"{delta_up:.2f}\n{'Flexion' if flex else ''}"
                 self.buttons[f'sensor_flexion_{name}'].set_text(text)
             '''
             # Print results
@@ -454,6 +455,7 @@ class BasalGanglia:
                     self.highlight_textbox(name, selected, reward)
                     
                     if selected: self.update_goal_probability(name, loop, probability=loop.expected_reward_over_time[loop.selected_goal][-1]) 
+        time.sleep(0.1)
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
         
@@ -568,10 +570,10 @@ class BasalGanglia:
             action_command_parts = []
 
             # Control all actuators
-            #for actuator in self.actuators_extensors + self.actuators_flexors:
-            #    action_command_parts.append(f"0-{actuator}-i")
-            #for actuator in self.actuators_extensors + self.actuators_flexors:
-            #    action_command_parts.append(f"{self.duration_actuators*1000}-{actuator}-h")
+            for actuator in self.actuators_extensors + self.actuators_flexors:
+                action_command_parts.append(f"0-{actuator}-i")
+            for actuator in self.actuators_extensors + self.actuators_flexors:
+                action_command_parts.append(f"{self.duration_actuators*1000}-{actuator}-h")
 
             # Control individual flexors based on selected action
             for i, bit in enumerate(action):
@@ -1340,10 +1342,12 @@ class BasalGangliaLoop:
                 for ct in self.weight_cell_types:
                     for msn_id in range(self.cell_types_numbers[ct][1]):
                         delta_w = 0
-                        delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[selected_goal][-1]
+                        #delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[selected_goal][-1]
                         if ct == 'MSNd':
+                            delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[selected_goal][-1]
                             delta_w = delta_w
                         elif ct == 'MSNi':
+                            delta_w = self.learning_rate * self.dopamine_over_time[selected_goal][-1]
                             delta_w = -delta_w
                         key = (ct, action_id, msn_id, goal_id, cor_id)
                         new_weight = min(1, max(0, self.weights_over_time[key][-1] + delta_w))
@@ -1626,18 +1630,31 @@ ms_to_s = FuncFormatter(lambda x, _: f'{x/1000}' if x % 100 == 0 else '')
 
 def create_BasalGanglia(no_of_joints=3):
     grasp_types = ["Precision pinch", "Power grasp"]
+    
     if no_of_joints == 4:
-        
         joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion", "Remaining fingers flexion"]
-        #actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Remaining fingers flexor"]
-        actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Middle finger flexor", "Ring finger flexor", "Pinky finger flexor"]
+        actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Remaining fingers flexor"]
+        #actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor", "Middle finger flexor", "Ring finger flexor", "Pinky finger flexor"]
         grasp_type_joint_indices_mapping = {"10": "1110", # Precision pinch
                                             "01": "1111"} # Power grasp
         joint_actuator_indices = {
             0: [0],
             1: [1],
             2: [2],
-            3: [3, 4, 5]
+            3: [3]#, 4, 5]
+        }
+    
+    elif no_of_joints == 5:
+        joints = ["Thumb flexion", "Index finger flexion", "Middle finger flexion", "Ring finger flexion", "Pinky finger flexion"]
+        actuators = ["Thumb flexor", "Index finger flexor", "Middle finger flexor", "Ring finger flexor", "Pinky finger flexor"]
+        grasp_type_joint_indices_mapping = {"10": "11000", # Precision pinch
+                                            "01": "11111"} # Power grasp
+        joint_actuator_indices = {
+            0: [0],
+            1: [1],
+            2: [2],
+            3: [3],
+            4: [4]
         }
 
     elif no_of_joints == 6:
@@ -1683,7 +1700,7 @@ def create_BasalGanglia(no_of_joints=3):
     bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
     BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
-create_BasalGanglia(no_of_joints=3)
+create_BasalGanglia(no_of_joints=4)
 
 
 

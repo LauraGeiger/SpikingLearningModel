@@ -30,6 +30,9 @@ commands = [
         +f'{time5}-1-h/{time5}-6-h/',
         'S'
     ]
+commands = ['0-2-i/250-2-h/2000-4-i/5000-4-h/',
+        'S'
+    ]
 index = 0
 
 try:
