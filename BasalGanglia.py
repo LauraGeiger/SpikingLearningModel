@@ -48,12 +48,27 @@ class BasalGanglia:
         self.num_flex_sensors = 6
         self.num_touch_sensors = 5
         self.actuators_flexors = [4, 1, 6, 8, 10, 12]
-        if len(self.loops[0].actions_names) < 4:
+        if len(self.loops[0].actions_names) < 3:
             self.actuators_flexors = self.actuators_flexors[1:1+len(self.loops[0].actions_names)]
         #random.shuffle(self.actuators_flexors)
         self.actuators_extensors = [2, 7, 9, 11, 13]
         self.duration_actuators = 0.3 # s
         self.delay = 0.5 # s
+
+        # Valve - Actuators
+        #  1 - Thumb flexor
+        #  2 - Thumb extensor
+        #  3 - Thumb abductor
+        #  4 - Thumb oppositor
+        #  5 - Wrist dorsifl
+        #  6 - Index finger flexor
+        #  7 - Index finger extensor
+        #  8 - Middle finger flexor
+        #  9 - Middle finger extensor
+        # 10 - Ring finger flexor
+        # 11 - Ring finger extensor
+        # 12 - Pinky finger flexor
+        # 13 - Pinky finger extensor
 
         self._init_loops()
         self._init_plotting()
@@ -153,9 +168,9 @@ class BasalGanglia:
                 for i, name in enumerate(loop.actions_names):
                     self.axs_selections[idx][i].set_axis_off() 
                     ax_selections = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
-                    label_text = '\n'.join(f"Actuator {i+1}".split())
+                    label_text = '\n'.join(f"Actuator {self.actuators_flexors[i]}".split())
                     #label_text = '\n'.join(name.split())
-                    self.buttons[f'Actuator {i+1}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
+                    self.buttons[f'Actuator {self.actuators_flexors[i]}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
 
                 # Plot a horizontal bar with width=prob
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
@@ -183,7 +198,8 @@ class BasalGanglia:
                     self.buttons[f'{name}'] = Button(ax_selections, label=f'{label_text}', color='None', hovercolor='lightgray')
                     self.buttons[f'{name}'].on_clicked(lambda event, loop=loop, i=i: self.update_goals(loop, i))
                     self.buttons[f'probability_{name}'] = ax_selections.text(0.5, 0.03, '', ha='center')
-                    self.buttons[f'sensor_flexion_{name}'] = ax_selections.text(0.5, 0.9, '', ha='center')
+                    self.buttons[f'sensor_flex_{name}'] = ax_selections.text(0.5, 0.9, '', ha='center')
+                    if i > 0: self.buttons[f'sensor_touch_{name}'] = ax_selections.text(0.5, 0, '', ha='center')
             
             if idx == 1:
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
@@ -316,7 +332,6 @@ class BasalGanglia:
             time.sleep(0.01)  # ~100 Hz sampling
     
     def analyze_sensor_data_flex(self, alpha=0.8, flexion_threshold=30, extension_threshold=30):
-        #try:
         if len(self.recorded_sensor_data_flex[0]) < self.num_flex_sensors:
             print("Not enough data from flex sensors")
         else:
@@ -345,7 +360,7 @@ class BasalGanglia:
 
                     prev_filtered[i] = filtered
 
-            if len(self.loops[0].actions_names) < 4:
+            if len(self.loops[0].actions_names) < 3:
                 self.flexion_detected = self.flexion_detected[1:1+len(self.loops[0].actions_names)]
                 max_filtered = max_filtered[1:1+len(self.loops[0].actions_names)]
                 start_filtered = start_filtered[1:1+len(self.loops[0].actions_names)]
@@ -357,7 +372,7 @@ class BasalGanglia:
                 delta_up = max_filtered[i] - start_filtered[i]
                 delta_down = start_filtered[i] - min_filtered[i]
                 text = f"{delta_up:.2f}\n{'Flexion' if flex else ''}"
-                self.buttons[f'sensor_flexion_{name}'].set_text(text)
+                self.buttons[f'sensor_flex_{name}'].set_text(text)
             '''
             # Print results
             print("\nFlexion and Extension Detection Results:")
@@ -376,11 +391,10 @@ class BasalGanglia:
                 )
             '''
             self.performed_action = ''.join(['1' if value else '0' for value in self.flexion_detected])
+            self.performed_action = self.performed_action[:len(self.loops[0].actions_names)]
             print(f"performed action = {self.performed_action}")
-        #except Exception as e: print(e)
 
     def analyze_sensor_data_touch(self, alpha=0.8, touch_threshold=20, window=30):
-        #try:
         if len(self.recorded_sensor_data_touch[0]) < self.num_touch_sensors:
             print("Not enough data from touch sensors")
         else:
@@ -390,6 +404,7 @@ class BasalGanglia:
             min_filtered = prev_filtered.copy()
 
             self.touch_detected = [False] * self.num_touch_sensors
+            #self.release_detected = [False] * self.num_touch_sensors
 
             for sample in self.recorded_sensor_data_touch[1:]:
                 for i in range(self.num_touch_sensors):
@@ -400,11 +415,21 @@ class BasalGanglia:
                     max_filtered[i] = max(max_filtered[i], filtered)
                     min_filtered[i] = min(min_filtered[i], filtered)
 
-                    # Detect touch
+                    # Detect touch and release
                     if (max_filtered[i] - start_filtered[i]) > touch_threshold:
                         self.touch_detected[i] = True
+                    #if (start_filtered[i] - min_filtered[i]) > touch_threshold:
+                    #    self.release_detected[i] = True
 
                     prev_filtered[i] = filtered
+
+            for i, name in enumerate(self.loops[0].goals_names[1:]):
+                touch = self.touch_detected[i]
+                #release = self.release_detected[i]
+                delta_up = max_filtered[i] - start_filtered[i]
+                delta_down = start_filtered[i] - min_filtered[i]
+                text = f"{delta_up:.2f} {'Touch' if touch else ''}"
+                self.buttons[f'sensor_touch_{name}'].set_text(text)
 
             # Print results
             '''
@@ -421,10 +446,8 @@ class BasalGanglia:
                     f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
                 )
             '''
-        #except Exception as e: print(e)
 
-    def update_GUI_goals_actions(self, frame=None): 
-        #print(f"{h.t} update_GUI_goals_actions")       
+    def update_GUI_goals_actions(self, frame=None):       
         for idx, loop in enumerate(self.loops):
             if loop.selected_goal:
                 visibility = False if set(loop.selected_goal) == {'0'} else True
@@ -438,11 +461,12 @@ class BasalGanglia:
                             char = loop.selected_action[0][i]
                         selected = char == '1'
                         reward = loop.reward_over_time[loop.selected_goal][-1]
-                        #self.highlight_textbox(name, selected, reward)
-                        self.highlight_textbox(f"Actuator {i+1}", selected, reward)
+                        self.highlight_textbox(f"Actuator {self.actuators_flexors[i]}", selected, reward)
             for i, name in enumerate(loop.goals_names):
-                #if not loop.child_loop: 
-                    #self.buttons[f'sensor_flexion_{name}'].set_text('') # reset sensor reading
+                if not loop.child_loop: # reset sensor reading
+                    self.buttons[f'sensor_flex_{name}'].set_text('')
+                    if i > 0:
+                        self.buttons[f'sensor_touch_{name}'].set_text('') 
                 if loop.selected_goal:
                     char = loop.selected_goal[i]
                     selected = char == '1'
@@ -455,12 +479,10 @@ class BasalGanglia:
                     self.highlight_textbox(name, selected, reward)
                     
                     if selected: self.update_goal_probability(name, loop, probability=loop.expected_reward_over_time[loop.selected_goal][-1]) 
-        time.sleep(0.1)
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
         
     def update_GUI_performed_action_reward(self, frame=None):
-        #print(f"{h.t} update_GUI_performed_action_reward")
         self.iteration = int(h.t / self.plot_interval)
         
         for idx, loop in enumerate(self.loops):
@@ -473,7 +495,7 @@ class BasalGanglia:
                         selected = char == '1'
                         reward = loop.reward_over_time[loop.selected_goal][-1]
                         if reward: 
-                            self.highlight_textbox(f"Actuator {i+1}", selected, reward)
+                            self.highlight_textbox(f"Actuator {self.actuators_flexors[i]}", selected, reward)
             for i, name in enumerate(loop.goals_names):
                 if loop.selected_goal:
                     char = loop.selected_goal[i]
@@ -512,6 +534,9 @@ class BasalGanglia:
         else:
             self.buttons[f'{name}'].ax.set_facecolor(rcParams['axes.facecolor'])
             self.buttons[f'{name}'].color = 'None'
+        
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
    
     def update_goals(self, loop, goal_idx):
         if loop.selected_goal:
@@ -631,7 +656,7 @@ class BasalGanglia:
 
                 # Update selections in basal ganglia overview plot
                 time_step = time.time()
-                self.update_GUI_goals_actions()
+                #self.update_GUI_goals_actions()
                 if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s update_GUI_goals_actions")
 
                 for loop in self.loops:
@@ -651,13 +676,12 @@ class BasalGanglia:
                     time_step = time.time()
                     loop.select_action()
                     if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s select_action {loop.name}")
-                
                 self.update_GUI_goals_actions()
+
                 if self.hw_connected:
                     self.perform_action()
                     if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
                     if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
-                    
                     
                 for loop in self.loops:
                     time_step = time.time()
@@ -1337,7 +1361,6 @@ class BasalGangliaLoop:
 
         # Only update weights for the selected goal and action
         if goal_id is not None and action_id is not None:
-            #print(f"Update weights for goal {selected_goal} with id {goal_id} and action {selected_action} with id {action_id} dopamine {self.dopamine_over_time[selected_goal][-1]}")
             for cor_id in range(self.cell_types_numbers['Cor'][1]):
                 for ct in self.weight_cell_types:
                     for msn_id in range(self.cell_types_numbers[ct][1]):
@@ -1347,7 +1370,8 @@ class BasalGangliaLoop:
                             delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[selected_goal][-1]
                             delta_w = delta_w
                         elif ct == 'MSNi':
-                            delta_w = self.learning_rate * self.dopamine_over_time[selected_goal][-1]
+                            factor = 2
+                            delta_w = self.learning_rate * factor *  self.dopamine_over_time[selected_goal][-1]
                             delta_w = -delta_w
                         key = (ct, action_id, msn_id, goal_id, cor_id)
                         new_weight = min(1, max(0, self.weights_over_time[key][-1] + delta_w))
@@ -1672,9 +1696,9 @@ def create_BasalGanglia(no_of_joints=3):
         }
         
     elif no_of_joints == 3:
-        joints = ["Thumb flexion", "Index finger flexion", "Middle finger flexion"]
-        actuators = ["Thumb flexor", "Index finger flexor", "Middle finger flexor"]
-        grasp_type_joint_indices_mapping = {"10": "110", # Precision pinch
+        joints = ["Thumb opposition", "Thumb flexion", "Index finger flexion"]
+        actuators = ["Thumb oppositor", "Thumb flexor", "Index finger flexor"]
+        grasp_type_joint_indices_mapping = {"10": "111", # Precision pinch
                                             "01": "111"} # Power grasp
         joint_actuator_indices = {
             0: [0],
@@ -1700,7 +1724,10 @@ def create_BasalGanglia(no_of_joints=3):
     bg_p = BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
     BasalGanglia(loops=[bg_m, bg_p]) # loops ordered from low-level to high-level
 
-create_BasalGanglia(no_of_joints=4)
+create_BasalGanglia(no_of_joints=3)
+
+
+
 
 
 
