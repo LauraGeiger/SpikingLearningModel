@@ -11,6 +11,13 @@ import time
 # using Python 3.10.16
 
 # --- Granule, Purkinje, Inferior Olive, and Basket Cell Classes ---
+class PontineNuclei:
+    def __init__(self, gid):
+        self.gid = gid
+        self.soma = h.Section(name=f'pontine_{gid}')
+        self.soma.L = self.soma.diam = 10
+        self.soma.insert('hh')
+
 class GranuleCell:
     def __init__(self, gid):
         self.gid = gid
@@ -39,18 +46,24 @@ class BasketCell:
         self.soma.L = self.soma.diam = 20
         self.soma.insert('hh')
 
+class DeepCerebellarNuclei:
+    def __init__(self, gid):
+        self.gid = gid
+        self.soma = h.Section(name=f'deep_cerebellar{gid}')
+        self.soma.L = self.soma.diam = 10
+        self.soma.insert('hh')
+
 def init_variables(reset_all=True):
     """Initialize global variables"""
     global fig, gs, ax_network, ax_plots, gs_buttons, animations, purkinje_drawing
     global iter, buttons, state, state_dict, state_grasp_hold_dict, DCN_names
     global colors_purkinje, color_granule, color_inferior_olive, color_basket, color_dcn, color_simple_spike, color_complex_spike, color_error, color_error_hover, color_run, color_run_hover
     global height, width, granule_x, purkinje_x, olive_x, basket_x, dcn_x, granule_y, purkinje_y, olive_y, basket_y, dcn_y
-    global t, granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, v_granule, v_purkinje, v_inferiorOlive, v_basket, t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np
-    global num_granule, num_purkinje, num_inferior_olive, num_basket, num_dcn, granule_cells, purkinje_cells, inferior_olive_cells, basket_cells
-    global pf_syns, pf_ncs, cf_syns, cf_ncs, inh_syns, inh_ncs
-    global weights, weights_over_time, pf_initial_weight, cf_initial_weight, basket_initial_weight, stimuli, frequency, processed_GC_spikes, processed_pairs, errors
+    global t, granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, dcn_spikes, v_granule, v_purkinje, v_inferiorOlive, v_basket, v_dcn, t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np, v_dcn_np
+    global num_granule, num_purkinje, num_inferior_olive, num_basket, num_dcn, pontine_nuclei, granule_cells, purkinje_cells, inferior_olive_cells, basket_cells, deep_cerebellar
+    global mf_syns, mf_ncs, pf_syns, pf_ncs, cf_syns, cf_ncs, inh_syns, inh_ncs, inh_dcn_syns, inh_dcn_ncs
+    global weights, weights_over_time, pf_initial_weight, cf_initial_weight, basket_initial_weight, dcn_initial_weight, stimuli, frequency, processed_GC_spikes, processed_pairs, errors
     global tau_plus, tau_minus, A_plus, A_minus
-    global start_time_learning_grasping, start_time_learning_holding
 
     # --- Plotting ---
     try: # Reset figure
@@ -104,28 +117,40 @@ def init_variables(reset_all=True):
     # --- Spikes and Voltages for Plotting ---
     t = h.Vector()  # First time initialization
     t_np = None
-    granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes = None, None, None, None
-    v_granule, v_purkinje, v_inferiorOlive, v_basket = None, None, None, None
-    v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np = None, None, None, None
+    granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, dcn_spikes = None, None, None, None, None
+    v_granule, v_purkinje, v_inferiorOlive, v_basket, v_dcn = None, None, None, None, None
+    v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np, v_dcn_np = None, None, None, None, None
 
     # --- Create Network ---
-    if reset_all == True: num_granule = 3
-    if reset_all == True: num_purkinje = 12
-    if reset_all == True: num_inferior_olive = 6
-    if reset_all == True: num_basket = 3
-    if reset_all == True: num_dcn = 6
+    N_grasp = 3
+    N_joints = 6
+    N_actuators = 6
+    N_flex = 6
+    N_pressure = 5
+    if reset_all == True: num_pontine = N_grasp + N_joints + N_actuators + N_flex + N_pressure
+    if reset_all == True: num_granule = 20
+    if reset_all == True: num_purkinje = 4
+    if reset_all == True: num_inferior_olive = 2
+    if reset_all == True: num_basket = 2
+    if reset_all == True: num_dcn = 2
+    pontine_nuclei = [PontineNuclei(i) for i in range(num_pontine)]
     granule_cells = [GranuleCell(i) for i in range(num_granule)]
     purkinje_cells = [PurkinjeCell(i) for i in range(num_purkinje)]
     inferior_olive_cells = [InferiorOliveCell(i) for i in range(num_inferior_olive)]
     basket_cells = [BasketCell(i) for i in range(num_basket)]
+    deep_cerebellar = [DeepCerebellarNuclei(i) for i in range(num_dcn)]
 
     # --- Create Synapses and Connections ---
+    mf_syns = [[None for _ in range(num_granule)] for _ in range(num_pontine)] # mossy fiber synapses
+    mf_ncs = [[None for _ in range(num_granule)] for _ in range(num_pontine)] # mossy fiber netcons
     pf_syns = [[None for _ in range(num_purkinje)] for _ in range(num_granule)] # parallel fiber synapses
     pf_ncs = [[None for _ in range(num_purkinje)] for _ in range(num_granule)] # parallel fiber netcons
     cf_syns = [[None for _ in range(num_purkinje)] for _ in range(num_inferior_olive)] # climbing fiber synapses
     cf_ncs = [[None for _ in range(num_purkinje)] for _ in range(num_inferior_olive)] # climbing fiber netcons
-    inh_syns = [[None for _ in range(num_purkinje)] for _ in range(num_basket)] # inhibitory synapses
-    inh_ncs = [[None for _ in range(num_purkinje)] for _ in range(num_basket)] # inhibitory netcons
+    inh_syns = [[None for _ in range(num_purkinje)] for _ in range(num_basket)] # inhibitory synapses from basket cell
+    inh_ncs = [[None for _ in range(num_purkinje)] for _ in range(num_basket)] # inhibitory netcons from basket cell
+    inh_dcn_syns = [[None for _ in range(num_dcn)] for _ in range(num_purkinje)] # inhibitory synapses to DCN
+    inh_dcn_ncs = [[None for _ in range(num_dcn)] for _ in range(num_purkinje)] # inhibitory netcons to DCN
 
     # --- Spikes and Weights ---
     weights = {}
@@ -133,6 +158,7 @@ def init_variables(reset_all=True):
     pf_initial_weight = 0.02 # Parallel fiber initial weight
     cf_initial_weight = 0.3 # Climbing fiber initial weight
     basket_initial_weight = 0.5 # Basket to Purkinje weight
+    dcn_initial_weight = 0.5 # Purkinje to DCN weight
     stimuli = []
     frequency = 50 # Hz
     processed_GC_spikes = { (g_gid): set() for g_gid in range(num_granule)} # store the processed granule cell spikes
@@ -197,6 +223,19 @@ def create_connections():
             nc.weight[0] = basket_initial_weight
             nc.delay = 0
             inh_ncs[basket.gid][purkinje.gid] = nc
+
+    # Purkinje → DCN Connections (inhibitory)
+    for purkinje in purkinje_cells:
+        for dcn in deep_cerebellar:
+            syn = h.Exp2Syn(dcn.soma(0.5))
+            syn.e = -70  # Inhibitory
+            syn.tau1 = 1 # Synaptic rise time
+            syn.tau2 = 5 # Synaptic decay time
+            inh_dcn_syns[purkinje.gid][dcn.gid] = syn
+            nc = h.NetCon(purkinje.soma(0.5)._ref_v, syn, sec=purkinje.soma)
+            nc.weight[0] = dcn_initial_weight
+            nc.delay = 0
+            inh_dcn_ncs[purkinje.gid][dcn.gid] = nc
 
 def activate_highest_weight_PC(granule_gid):
     """Activate the PC with the highest weight (that is not blocked)"""
@@ -315,7 +354,7 @@ def change_back_error_button_colors():
 
 def update_granule_stimulation_and_plots(event=None):
     """Stimulates one granule cell and updates the plots """
-    global granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, buttons, iter, ax_network, animations
+    global granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, dcn_spikes, buttons, iter, ax_network, animations
     global errors
 
     # Apply errors
@@ -820,19 +859,21 @@ def update_weights(pre_gid, post_gid, pre_t, post_t):
     
 def recording():
     """Records Spiking Activity and Voltages"""
-    global t, granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, v_granule, v_purkinje, v_inferiorOlive, v_basket
+    global t, granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, dcn_spikes, v_granule, v_purkinje, v_inferiorOlive, v_basket, v_dcn
 
     t.record(h._ref_t)  # Reattach to NEURON's time
 
-    granule_spikes = {i: h.Vector() for i in range(num_granule)}
-    purkinje_spikes = {i: h.Vector() for i in range(num_purkinje)}
+    granule_spikes =       {i: h.Vector() for i in range(num_granule)}
+    purkinje_spikes =      {i: h.Vector() for i in range(num_purkinje)}
     inferiorOlive_spikes = {i: h.Vector() for i in range(num_inferior_olive)}
-    basket_spikes = {i: h.Vector() for i in range(num_basket)}
+    basket_spikes =        {i: h.Vector() for i in range(num_basket)}
+    dcn_spikes =           {i: h.Vector() for i in range(num_dcn)}
 
-    v_granule = {i: h.Vector().record(granule_cells[i].soma(0.5)._ref_v) for i in range(num_granule)}
-    v_purkinje = {i: h.Vector().record(purkinje_cells[i].soma(0.5)._ref_v) for i in range(num_purkinje)}
+    v_granule =       {i: h.Vector().record(granule_cells[i].soma(0.5)._ref_v) for i in range(num_granule)}
+    v_purkinje =      {i: h.Vector().record(purkinje_cells[i].soma(0.5)._ref_v) for i in range(num_purkinje)}
     v_inferiorOlive = {i: h.Vector().record(inferior_olive_cells[i].soma(0.5)._ref_v) for i in range(num_inferior_olive)}
-    v_basket = {i: h.Vector().record(basket_cells[i].soma(0.5)._ref_v) for i in range(num_basket)}
+    v_basket =        {i: h.Vector().record(basket_cells[i].soma(0.5)._ref_v) for i in range(num_basket)}
+    v_dcn =           {i: h.Vector().record(deep_cerebellar[i].soma(0.5)._ref_v) for i in range(num_dcn)}
 
     for granule in granule_cells:
         nc = h.NetCon(granule.soma(0.5)._ref_v, None, sec=granule.soma)
@@ -850,13 +891,17 @@ def recording():
         nc = h.NetCon(basket.soma(0.5)._ref_v, None, sec=basket.soma)
         nc.record(basket_spikes[basket.gid])
     
+    for dcn in deep_cerebellar:
+        nc = h.NetCon(dcn.soma(0.5)._ref_v, None, sec=dcn.soma)
+        nc.record(dcn_spikes[dcn.gid])
+    
     h.finitialize(-65) # Set all membrane potentials to -65mV
     
 def run_simulation(error=False):
     """Runs the simulation for one iteration and tracks the weights"""
-    global granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes
+    global granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, dcn_spikes
     global iter, spike_times, processed_GC_spikes, processed_pairs, frequency, weights_over_time
-    global t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np
+    global t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np, v_dcn_np
 
     try:
         buttons["run_button"].color = "0.85"
@@ -906,10 +951,11 @@ def run_simulation(error=False):
                         weights_over_time[(g_id, p_id)].append(weights[(g_id, p_id)])
  
     # --- Convert Spike Data ---
-    spike_times =      {f"GC{i+1}": list(granule_spikes[i])       for i in range(num_granule)}
-    spike_times.update({f"PC{i+1}": list(purkinje_spikes[i])      for i in range(num_purkinje)})
-    spike_times.update({f"IO{i+1}": list(inferiorOlive_spikes[i]) for i in range(num_inferior_olive)})
-    spike_times.update({f"BC{i+1}": list(basket_spikes[i])        for i in range(num_basket)})
+    spike_times =      {f"GC{i+1}":  list(granule_spikes[i])       for i in range(num_granule)}
+    spike_times.update({f"PC{i+1}":  list(purkinje_spikes[i])      for i in range(num_purkinje)})
+    spike_times.update({f"IO{i+1}":  list(inferiorOlive_spikes[i]) for i in range(num_inferior_olive)})
+    spike_times.update({f"BC{i+1}":  list(basket_spikes[i])        for i in range(num_basket)})
+    spike_times.update({f"DCN{i+1}": list(dcn_spikes[i])           for i in range(num_dcn)})
     
     # --- Convert Voltage Data and Weights ---
     t_np = np.array(t)
@@ -917,10 +963,11 @@ def run_simulation(error=False):
     v_purkinje_np =      np.array([vec.to_python() for vec in v_purkinje.values()])
     v_inferiorOlive_np = np.array([vec.to_python() for vec in v_inferiorOlive.values()])
     v_basket_np =        np.array([vec.to_python() for vec in v_basket.values()])
+    v_dcn_np =           np.array([vec.to_python() for vec in v_dcn.values()])
 
 def update_spike_and_weight_plot():
     """Updates the plots for the spikes and weights (one weight plot per DCN) and the buttons"""
-    global t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np
+    global t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np, v_dcn_np
     global buttons, fig, gs, ax_network, ax_plots, gs_buttons
 
     if gs == None or ax_network == None or ax_plots == None:
@@ -950,35 +997,35 @@ def update_spike_and_weight_plot():
         if granule.gid == (state-1) % num_granule:
             ax1 = ax_plots[0]
             ax1.set_title(f"Spiking Activity")
-            ax1.plot(t_np, v_granule_np[granule.gid], label=f"GC{granule.gid+1 if state > 0 else ''}", color=color_granule, linestyle="dashed")
+            #ax1.plot(t_np, v_granule_np[granule.gid], label=f"GC{granule.gid+1 if state > 0 else ''}", color=color_granule, linestyle="dashed")
             ax1.set_xlabel("Time (ms)") 
             ax1.set_ylabel("Membrane Voltage (mV)")
-    
-            for i in range(num_dcn):
-                ax2 = ax_plots[1 + i]
-                ax2.set_title(f"Synaptic Weights")
-                ax2.set_xlabel("Time (ms)")
-                ax2.set_ylabel("Synaptic Weight")
+
+            for i, dcn in enumerate (deep_cerebellar):
+                ax1.plot(t_np, v_dcn_np[dcn.gid], label=f"DCN{dcn.gid+1}", color=color_dcn)
 
                 for purkinje in purkinje_cells:
+                    # --- Spiking Plot for GC and its connected PCs ---
                     text_blocked = ""
                     try:
                         if v_purkinje_np[purkinje.gid][-1] > -56:
                             text_blocked = " blocked"
                     except IndexError: None
-
-                    # --- Spiking Plot for GC and its connected PCs ---
                     ax1.plot(t_np, v_purkinje_np[purkinje.gid], label=f"PC{purkinje.gid+1}{text_blocked}", color=colors_purkinje[purkinje.gid])
-
+                    
                     # --- Weight Plot for GC to all connected PCs ---
+                    ax2 = ax_plots[1 + i]
+                    ax2.set_title(f"Synaptic Weights")
+                    ax2.set_xlabel("Time (ms)")
+                    ax2.set_ylabel("Synaptic Weight")
                     if len(weights_over_time[(granule.gid, purkinje.gid)]) > 0:
                         if purkinje.gid >= i * num_purkinje // num_dcn and purkinje.gid < (i + 1) * num_purkinje // num_dcn:
                             ax2.plot(t_np, weights_over_time[(granule.gid, purkinje.gid)], label=f"PC{purkinje.gid+1}{text_blocked}", color=colors_purkinje[purkinje.gid])
 
             for inferior_olive in inferior_olive_cells:
                 ax1.plot(t_np, v_inferiorOlive_np[inferior_olive.gid], label=f"IO{inferior_olive.gid+1 if len(inferior_olive_cells) > 1 else ''}", color=color_inferior_olive, linestyle="dashed")
-            for basket in basket_cells:
-                ax1.plot(t_np, v_basket_np[basket.gid], label=f"BC{basket.gid+1 if len(basket_cells) > 1 else ''}", color=color_basket, linestyle="dashed")
+            #for basket in basket_cells:
+            #    ax1.plot(t_np, v_basket_np[basket.gid], label=f"BC{basket.gid+1 if len(basket_cells) > 1 else ''}", color=color_basket, linestyle="dashed")
 
     # Collect all legend handles and labels for the first column
     handles_first_row = []
@@ -987,9 +1034,9 @@ def update_spike_and_weight_plot():
     for l, h in zip(labels, handles):
         if l not in labels_first_row:  # Avoid duplicates
             # Exclude Purkinje cells from the first legend
-            if "PC" not in l:  # Only add non-Purkinje labels
-                labels_first_row.append(l)
-                handles_first_row.append(h)
+            #if "PC" not in l:  # Only add non-Purkinje labels
+            labels_first_row.append(l)
+            handles_first_row.append(h)
     labels_first_row, handles_first_row = zip(*sorted(zip(labels_first_row, handles_first_row), key=lambda x: x[0]))
     
     # Create a single legend for the first column
@@ -1058,8 +1105,8 @@ def update_spike_and_weight_plot():
     #plt.pause(1)
 
 def main(reset=True):
-    global t, granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes
-    global t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np, iter
+    global t, granule_spikes, purkinje_spikes, inferiorOlive_spikes, basket_spikes, dcn_spikes
+    global t_np, v_granule_np, v_purkinje_np, v_inferiorOlive_np, v_basket_np, v_dcn_np, iter
 
     init_variables(reset)
     create_connections()
