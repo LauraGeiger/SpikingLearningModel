@@ -787,6 +787,7 @@ class MotorLearning:
                     loop.update_plots(current_time=h.t)
 
                 # Cerebellum update weights and plot
+                self.cerebellum.update_weights(current_time=h.t)
                 self.cerebellum.update_plots(current_time=h.t)
 
                 # Pause simulation
@@ -1679,6 +1680,12 @@ class BasalGangliaLoop:
 class Cerebellum:
 
     def __init__(self, grasp_types, joints, actuators):
+
+        self.noise = 0
+        self.apc_refs = []
+        self.plot_interval = 0
+        self.bin_width_firing_rate = 0
+
         N_flex = 6
         N_pressure = 5
         self.grasp_types = grasp_types
@@ -1687,22 +1694,23 @@ class Cerebellum:
         self.num_pontine = len(self.grasp_types) + len(self.joints) + len(self.actuators) + N_flex + N_pressure
         self.num_granule = 50
         self.num_deep_cerebellar = 2 # 1 for positive correction, 1 for negative correction
-        self.num_purkinje = self.num_deep_cerebellar * 2
+        self.num_purkinje = self.num_deep_cerebellar * 4
         self.num_inferior_olive = self.num_deep_cerebellar
     
         self.cell_types_numbers = {'PN':  [1, self.num_pontine], 
                                    'GC':  [1, self.num_granule], 
                                    'PC':  [len(self.actuators), self.num_purkinje], 
                                    'DCN': [len(self.actuators), self.num_deep_cerebellar],
-                                   'IO':  [len(self.actuators), self.num_inferior_olive],}
+                                   'IO':  [len(self.actuators), self.num_inferior_olive]}
         self.cell_types = list(self.cell_types_numbers.keys())
+        self.total_cell_numbers = {cell: val[0] * val[1] for cell, val in self.cell_types_numbers.items()}
 
         self.stim_intervals = {
             'PN'  : 1000 / 50, # Hz
             'GC'  : 0,
             'PC'  : 0, 
             'DCN' : 0,
-            'IO'  : 1000 / 50 # Hz
+            'IO'  : 1000 / 10 # Hz
         }
  
         self.stim_weights = {
@@ -1719,31 +1727,50 @@ class Cerebellum:
 
         # Define connection specifications
         self.connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay, sparsity, grouped
-            ('PN', 'GC',  'PN_to_GC',    0, 2.5, 10, 1, 1, 0),  # excitatory
-            ('GC', 'DCN', 'GC_to_DCN',   0, 5.5, 10, 2, 0, 0),  # excitatory
-            ('GC', 'PC',  'GC_to_PC',    0, 2.5, 10, 1, 0, 0),  # excitatory
-            ('IO', 'PC',  'IO_to_PC',    0, 2.5, 10, 1, 0, 1),  # excitatory
-            ('PC', 'DCN', 'PC_to_DCN', -85, 2.5, 10, 1, 0, 1)   # inhibitory
+            ('PN', 'GC',  'PN_to_GC',    0, 0.1,  10, 1, 1, 0),  # excitatory
+            ('GC', 'DCN', 'GC_to_DCN',   0, 0.05, 10, 2, 0, 0),  # excitatory
+            ('GC', 'PC',  'GC_to_PC',    0, 0.05, 10, 1, 0, 0),  # excitatory
+            ('IO', 'PC',  'IO_to_PC',    0, 0.0,  10, 1, 0, 1),  # excitatory
+            ('PC', 'DCN', 'PC_to_DCN', -85, 20.0, 20, 1, 0, 1)   # inhibitory
         ]
         
-        self._is_updating_programmatically = False
-        self.noise = 0
-        self.apc_refs = []
-
         self.num_of_plots = min(6, len(self.actuators))
-        self.plot_interval = None
-        self.bin_width_firing_rate = None
 
         self.buttons = {}
         self.rates = {}
         self.rates_rel = {}
 
+        # Weights
+        self.weight_times = [0]
+        initial_weight = 0
+        for spec in self.connection_specs:
+            pre_group, post_group, label, e_rev, weight, tau, delay, sparsity, grouped = spec
+            if label == 'GC_to_PC':
+                initial_weight = weight
+        self.weights_over_time = {(gc_id, pc_id): [initial_weight] 
+                            for gc_id in range(self.total_cell_numbers['GC'])
+                            for pc_id in range(self.total_cell_numbers['PC'])
+                            }
+        self.processed_pairs = {}
+        self.nc_index_map = {}      # label -> {(pre_id, post_id): idx}
+        self.pre_to_post = {}       # label -> {pre_id: [post_id1, post_id2, ...]}
+        self.post_to_pre = {}       # label -> {post_id: [pre_id1, pre_id2, ...]}
+        
+        self.ltp_amount   =  +0.002      # fixed LTP per GC spike
+        self.ltd_max      =  0.02        # maximum LTD per GC–IO pairing (at Δt -> 0)
+        self.ltd_tau_ms   =  40.0        # time constant for LTD kernel (ms)
+        self.ltd_window   =  100.0       # only GC spikes within last 100 ms count
+        self.w_min        =  0.0         # weight floor
+        self.w_max        =  1.0         # weight ceiling
+
+        
         self._init_cells()
         self._init_spike_detectors()
         self._init_stimuli()
         self._init_connections()
         self._init_recording()
         self._init_plotting()
+
 
     def _init_cells(self):
         # Create neuron populations
@@ -1755,7 +1782,7 @@ class Cerebellum:
             for cell_type in self.cell_types
         }
     
-    def _init_spike_detectors(self):
+    def old_init_spike_detectors(self):
         # Spike detectors and vectors
         self.spike_times = {
             cell_type: [
@@ -1771,13 +1798,38 @@ class Cerebellum:
                     apc = h.APCount(cell(0.5))
                     apc.record(self.spike_times[cell_type][population][index])
                     self.apc_refs.append(apc)
+    
+    def _init_spike_detectors(self):
+        # Spike detectors and vectors
+        self.spike_times = {
+            cell_type: [
+                [h.Vector() for index in range(self.cell_types_numbers[cell_type][1])]
+                for population in range(self.cell_types_numbers[cell_type][0])
+            ]
+            for cell_type in self.cell_types
+        }
+
+        self.apc_refs = []
+        self.last_index = {cell_type: [
+                [0 for index in range(self.cell_types_numbers[cell_type][1])]
+                for population in range(self.cell_types_numbers[cell_type][0])
+            ]
+            for cell_type in self.cell_types
+        }
+
+        for cell_type in self.cell_types:
+            for population in range(self.cell_types_numbers[cell_type][0]):
+                for index, cell in enumerate(self.cells[cell_type][population]):
+                    apc = h.APCount(cell(0.5))
+                    apc.record(self.spike_times[cell_type][population][index])
+                    self.apc_refs.append(apc)
 
     def _init_stimuli(self):
         for cell_type in self.cell_types:
             self.stims[cell_type], self.syns[cell_type], self.ncs[cell_type] = [], [], []
             for population in range(self.cell_types_numbers[cell_type][0]):
                 for i, cell in enumerate(self.cells[cell_type][population]):
-                    offset = i*self.stim_intervals[cell_type]/self.cell_types_numbers[cell_type][1]
+                    offset = 1#i*self.stim_intervals[cell_type]/self.cell_types_numbers[cell_type][1]
                     stim, syn, nc = create_stim(cell, start=offset, interval=self.stim_intervals[cell_type], e=0, tau=0.5, weight=self.stim_weights[cell_type], noise=self.noise)
                     self.stims[cell_type].append(stim)
                     self.syns[cell_type].append(syn)
@@ -1818,9 +1870,13 @@ class Cerebellum:
                 post_groups = [[post] for post in all_post]
 
             # Create NetCon and ExpSyn
+            pre_id_of  = {id(cell): i for i, cell in enumerate(all_pre)}
+            post_id_of = {id(cell): i for i, cell in enumerate(all_post)}
             for pre_group_cells, post_group_cells in zip(pre_groups, post_groups):
                 for pre_cell in pre_group_cells:
+                    pre_id = pre_id_of[id(pre_cell)]
                     for post_cell in post_group_cells:
+                        post_id = post_id_of[id(post_cell)]
                         # Optional sparsity only for full connection
                         if not grouped and sparsity:
                             k = 5
@@ -1836,6 +1892,16 @@ class Cerebellum:
                         nc.delay = delay
                         self.syns[label].append(syn)
                         self.ncs[label].append(nc)
+
+                        # Save index mapping
+                        idx = len(self.ncs[label]) - 1
+                        if not label in self.nc_index_map:
+                            self.nc_index_map[label] = {}
+                            self.pre_to_post[label] = {}
+                            self.post_to_pre[label] = {}
+                        self.nc_index_map[label][(pre_id, post_id)] = idx
+                        self.pre_to_post[label].setdefault(pre_id, []).append(post_id)
+                        self.post_to_pre[label].setdefault(post_id, []).append(pre_id)
   
     def _init_recording(self):
         # Recording
@@ -2050,9 +2116,173 @@ class Cerebellum:
                 teaching_input[2 * j_idx + 1] = 1 # need negative correction
             
         # Update IO stimuli
-        print(f" teaching signal {teaching_input} desired joints {desired_joints}")
         self.update_stimulus_activation(ct='IO', input=teaching_input)
 
+    '''
+    def old_update_weights(self, current_time):
+        self.weight_times.append(int(current_time))
+                    
+        # Update weights 
+        for GC_id in range(self.total_cell_numbers['GC']):
+            for IO_id in range(self.total_cell_numbers['IO']):
+                key = (GC_id, IO_id)
+                if key not in self.processed_pairs:
+                    self.processed_pairs[key] = []
+                for GC_t in self.spike_times['GC'][0]:
+                    # LTP
+                    for IO_t in self.spike_times['IO'][0]:
+                        if (GC_t, IO_t) not in self.processed_pairs[key]:
+                            self.processed_pairs[key].add((GC_t, IO_t))
+                            delta_w = 0
+                            #LTD
+                            new_weight = self.weights_over_time[key][-1] + delta_w
+                            self.weights_over_time[key].append(round(new_weight, 4))
+                            idx = self.nc_index_map[(GC_id, PC_id)]
+                            self.ncs[f'GC_to_PC'][idx].weight[0] = new_weight
+
+        # For all other keys, just append the previous value to keep list lengths consistent
+        for key in self.weights_over_time:
+            if len(self.weights_over_time[key]) < len(self.weight_times):
+                self.weights_over_time[key].append(self.weights_over_time[key][-1])
+    '''
+    def old_update_weights(self, current_time):
+        """
+        Update weights over the last plot_interval ending at current_time.
+        - LTP: all GCs that fired in the interval [t0, t) potentiate all their GC->PC synapses.
+        - LTD: all IO spikes in [t0, t) trigger LTD on GC->PC synapses where
+            the GC fired within [io_t - ltd_window, io_t).
+        """
+
+
+        t0 = current_time - self.plot_interval
+        t1 = current_time
+        self.weight_times.append(int(t1))
+
+
+
+        # ---------- LTP: all GC spikes in [t0, t1) ----------
+        for gc_id, spikes in enumerate(self.spike_times['GC']):
+            print(f"gc spikes = {[ts.to_python() for ts in spikes]}")
+            
+            recent_spikes = [ts for ts in spikes if t0 <= ts < t1]
+            print(f"recent GC spikes = {recent_spikes}")
+            if not recent_spikes:
+                continue
+            # If at least one spike in interval, do one LTP update
+            for pc_id in self.pre_to_post['GC_to_PC'][gc_id]:
+                idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
+                nc = self.ncs['GC_to_PC'][idx]
+                w_new = min(self.w_max, nc.weight[0] + self.ltp_amount)
+                nc.weight[0] = w_new
+                self.weights_over_time[(gc_id, pc_id)].append(round(w_new, 6))
+
+        # ---------- LTD: all IO spikes in [t0, t1) ----------
+        for io_id, spikes in enumerate(self.spike_times['IO']):
+            print(f"io spikes = {[ts for ts in spikes]}")
+            io_recent = [ts for ts in spikes if t0 <= ts < t1]
+            print(f"recent IO spikes = {io_recent}")
+            for io_t in io_recent:
+                for pc_id in self.pre_to_post['IO_to_PC'][io_id]:
+                    for gc_id in self.post_to_pre['GC_to_PC'][pc_id]:
+                        # GC spikes in the LTD window relative to this IO event
+                        gc_window = [ts for ts in self.spike_times['GC'][gc_id]
+                                    if io_t - self.ltd_window < ts < io_t]
+                        if not gc_window:
+                            continue
+                        total_ltd = sum(self.ltd_max * np.exp(-(io_t - ts) / self.ltd_tau_ms)
+                                        for ts in gc_window)
+                        idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
+                        nc = self.ncs['GC_to_PC'][idx]
+                        w_new = max(self.w_min, nc.weight[0] - total_ltd)
+                        nc.weight[0] = w_new
+                        self.weights_over_time[(gc_id, pc_id)].append(round(w_new, 6))
+
+        # ---------- Keep vectors aligned ----------
+        initial_weight = 0
+        for spec in self.connection_specs:
+            pre_group, post_group, label, e_rev, weight, tau, delay, sparsity, grouped = spec
+            if label == 'GC_to_PC':
+                initial_weight = weight
+        for key, ws in self.weights_over_time.items():
+            #print(f"key = {key} weight = {ws}")
+            if len(ws) < len(self.weight_times):
+                ws.append(ws[-1] if ws else initial_weight)
+
+    def get_new_spikes(self, cell_type, population, index):
+        vec = self.spike_times[cell_type][population][index]
+        start = self.last_index[cell_type][population][index]
+        all_spikes = vec.to_python()
+        new_spikes = all_spikes[start:]
+        self.last_index[cell_type][population][index] = len(all_spikes)
+        return new_spikes
+
+
+    def update_weights(self, current_time):
+        """Update synaptic weights based on spikes in the last plot_interval."""
+
+        self.weight_times.append(int(current_time))
+
+        # --- Parameters ---
+        A_plus = 0.01        # fixed LTP increment
+        A_minus = 0.02       # max LTD decrement
+        tau_LTD = 100.0      # ms decay constant
+
+        # --- Gather new GC spikes ---
+        gc_spikes = {}
+        for pop in range(self.cell_types_numbers['GC'][0]):      # usually 1
+            for gc_id in range(self.cell_types_numbers['GC'][1]):
+                new_spikes = self.get_new_spikes('GC', pop, gc_id)
+                if new_spikes:
+                    gc_spikes[gc_id] = new_spikes
+
+        # --- Gather new IO spikes ---
+        io_spikes = {}
+        for pop in range(self.cell_types_numbers['IO'][0]):      # per actuator-direction
+            for io_id in range(self.cell_types_numbers['IO'][1]):
+                new_spikes = self.get_new_spikes('IO', pop, io_id)
+                if new_spikes:
+                    io_spikes[(pop, io_id)] = new_spikes
+
+        # --- Apply LTP (per GC spike) ---
+        for gc_id, gc_times in gc_spikes.items():
+            for gc_t in gc_times:
+                for pc_id in range(self.total_cell_numbers['PC']):
+                    key = (gc_id, pc_id)
+                    if key not in self.weights_over_time:
+                        self.weights_over_time[key] = [
+                            self.ncs['GC_to_PC'][self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]].weight[0]
+                        ]
+                    # LTP: fixed increase
+                    new_weight = self.weights_over_time[key][-1] + A_plus
+                    self.weights_over_time[key].append(round(new_weight, 4))
+                    idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
+                    self.ncs['GC_to_PC'][idx].weight[0] = new_weight
+
+        # --- Apply LTD (per IO spike) ---
+        for (pop, io_id), io_times in io_spikes.items():
+            for io_t in io_times:
+                # LTD: check all GCs that spiked before this IO spike
+                for gc_id, gc_times in gc_spikes.items():
+                    for gc_t in gc_times:
+                        delta_t = io_t - gc_t
+                        if 0 < delta_t <= tau_LTD:  # within window
+                            for pc_id in range(self.total_cell_numbers['PC']):
+                                key = (gc_id, pc_id)
+                                if key not in self.weights_over_time:
+                                    self.weights_over_time[key] = [
+                                        self.ncs['GC_to_PC'][self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]].weight[0]
+                                    ]
+                                # LTD: exponential decay
+                                delta_w = -A_minus * np.exp(-delta_t / tau_LTD)
+                                new_weight = self.weights_over_time[key][-1] + delta_w
+                                self.weights_over_time[key].append(round(new_weight, 4))
+                                idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
+                                self.ncs['GC_to_PC'][idx].weight[0] = new_weight
+
+        # --- Keep lists consistent (keys without updates) ---
+        for key in self.weights_over_time:
+            if len(self.weights_over_time[key]) < len(self.weight_times):
+                self.weights_over_time[key].append(self.weights_over_time[key][-1])
 
     def update_plots(self, current_time, goal=None, action=None):
         '''
