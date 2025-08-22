@@ -761,7 +761,7 @@ class MotorLearning:
                 desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
                 desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
                 flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
-                touch_sensor_values_on = [0.2, 1.0, 0.4, 0.0, 0.0]
+                touch_sensor_values_on = [0.2, 0.8, 0.4, 0.0, 0.0]
                 touch_sensor_values_off = [0.6, 0.0, 0.0, 0.0, 0.0]
                 self.cerebellum.update_input_stimuli(current_time=h.t, desired_grasp_type=desired_grasp_type, desired_joints=desired_joints, desired_actuators=desired_actuators, flex_sensor_values=flex_sensor_values, touch_sensor_values=touch_sensor_values_on)
 
@@ -1683,8 +1683,8 @@ class Cerebellum:
 
         self.noise = 0
         self.apc_refs = []
-        self.plot_interval = 0
-        self.bin_width_firing_rate = 0
+        self.plot_interval = None
+        self.bin_width_firing_rate = None
 
         N_flex = 6
         N_pressure = 5
@@ -1752,16 +1752,16 @@ class Cerebellum:
                             for pc_id in range(self.total_cell_numbers['PC'])
                             }
         self.processed_pairs = {}
+        self.gc_spikes_last_interval = []
         self.nc_index_map = {}      # label -> {(pre_id, post_id): idx}
         self.pre_to_post = {}       # label -> {pre_id: [post_id1, post_id2, ...]}
         self.post_to_pre = {}       # label -> {post_id: [pre_id1, pre_id2, ...]}
         
-        self.ltp_amount   =  +0.002      # fixed LTP per GC spike
-        self.ltd_max      =  0.02        # maximum LTD per GC–IO pairing (at Δt -> 0)
-        self.ltd_tau_ms   =  40.0        # time constant for LTD kernel (ms)
-        self.ltd_window   =  100.0       # only GC spikes within last 100 ms count
-        self.w_min        =  0.0         # weight floor
-        self.w_max        =  1.0         # weight ceiling
+
+        # --- Parameters ---
+        self.A_plus = 0.01        # fixed LTP increment
+        self.A_minus = 0.02       # max LTD decrement
+        self.tau_LTD = 50.0       # ms decay constant
 
         
         self._init_cells()
@@ -1935,7 +1935,7 @@ class Cerebellum:
         
         self._init_membrane_potential_plot()
         self._init_spike_plot()
-        #self._init_weight_plot()
+        self._init_weight_plot()
 
         plt.show()
         plt.tight_layout()
@@ -1944,7 +1944,6 @@ class Cerebellum:
         # Membrane potential plot
         self.axs_plot[self.row_potential][0].set_ylabel('Membrane potential (mV)')
         self.axs_input[0].set_ylabel('Membrane potential (mV)')
-        print(f"cell")
         self.mem_lines = {ct: [] for ct in self.cell_types}
 
         for j, ct in enumerate(self.cell_types):
@@ -1953,7 +1952,6 @@ class Cerebellum:
                     label = ct if n==0 else ''
                     line, = self.axs_input[0].plot([], [], f'C{j}', label=label)
                     self.mem_lines[ct].append(line)
-        print(f"self.joints {self.joints} axs_input {self.axs_input}")
         self.axs_input[0].set_xlim(0, self.plot_interval)
         self.axs_input[0].set_ylim(-85, 65)
         self.axs_input[0].xaxis.set_major_formatter(ms_to_s)
@@ -2049,27 +2047,20 @@ class Cerebellum:
 
     def _init_weight_plot(self):
         # Weight plot
-        self.axs_plot[self.row_weights][0].set_ylabel('Cortical input weight')
-        self.weight_lines = {ct: [[] for _ in range(self.num_of_plots)] for ct in self.weight_cell_types}
-        self.activation_lines = []
+        self.axs_plot[self.row_weights][0].set_ylabel('GC-PC weights')
+        self.weight_lines = [[[] for _ in range(self.cell_types_numbers['PC'][1])] for _ in range(self.num_of_plots)]
 
-        for i, ch in enumerate(range(self.num_of_plots)):
-            for j, ct in enumerate(self.cell_types):
-                if ct in self.weight_cell_types:
-                    self.weight_lines[ct][i] = []
-                    for k in range(self.cell_types_numbers[ct][1]):
-                        label = ct if k == 0 else None  # Only label the first line
-                        line, = self.axs_plot[self.row_weights][i].step([], [], f'C{j}', label=label, where='post')
-                        self.weight_lines[ct][i].append(line)
+        for idx in range(self.num_of_plots):
+            for pc_id in range(self.cell_types_numbers['PC'][1]):
+                for gc_id in range (self.total_cell_numbers['GC']):
+                    line, = self.axs_plot[self.row_weights][idx].step([], [], f'C{1}', where='post')
+                    self.weight_lines[idx][pc_id].append(line)
 
-            activation_line, = self.axs_plot[self.row_weights][i].step([], [], 'C7', linestyle='dashed', label='Activation', where='post')
-            self.activation_lines.append(activation_line)
-
-            self.axs_plot[self.row_weights][i].set_xlim(0, self.plot_interval)
-            self.axs_plot[self.row_weights][i].set_ylim(-0.1, 1.1)
-            self.axs_plot[self.row_weights][i].xaxis.set_major_formatter(ms_to_s)
-            self.axs_plot[self.row_weights][i].set_xlabel('Simulation\ntime (s)')
-        self.axs_plot[self.row_weights][-1].legend(loc='upper right')
+            self.axs_plot[self.row_weights][idx].set_xlim(0, self.plot_interval)
+            self.axs_plot[self.row_weights][idx].set_ylim(-0.1, 1.1)
+            self.axs_plot[self.row_weights][idx].xaxis.set_major_formatter(ms_to_s)
+            self.axs_plot[self.row_weights][idx].set_xlabel('Simulation\ntime (s)')
+        #self.axs_plot[self.row_weights][-1].legend(loc='upper right')
 
     def update_stimulus_activation(self, ct, input=None):
         for k, _ in enumerate(self.ncs[ct]):
@@ -2093,7 +2084,7 @@ class Cerebellum:
     
     def update_teaching_stimuli(self, desired_joints, touch_sensor_values_on, touch_sensor_values_off):
         joint_to_finger_mapping = [0] + [i for i in range(len(self.joints) - 1)] # 2 joints for thumb
-        teaching_input = [0] * self.cell_types_numbers['IO'][0] * self.cell_types_numbers['IO'][1]
+        teaching_input = [0] * self.total_cell_numbers['IO']
         
         for j_idx, desired_joint in enumerate(desired_joints):
             finger_idx = joint_to_finger_mapping[j_idx]
@@ -2102,6 +2093,7 @@ class Cerebellum:
             touch_on = touch_sensor_values_on[finger_idx]
             touch_off = touch_sensor_values_off[finger_idx]
 
+            print(f"desired joint = {desired_joint} touch on = {touch_on} touch off = {touch_off}")
             # Check mismatches
             if desired_joint == 1:
                 if (touch_off > 0 or touch_on == 0):
@@ -2116,97 +2108,8 @@ class Cerebellum:
                 teaching_input[2 * j_idx + 1] = 1 # need negative correction
             
         # Update IO stimuli
+        print(f"teaching input = {teaching_input}")
         self.update_stimulus_activation(ct='IO', input=teaching_input)
-
-    '''
-    def old_update_weights(self, current_time):
-        self.weight_times.append(int(current_time))
-                    
-        # Update weights 
-        for GC_id in range(self.total_cell_numbers['GC']):
-            for IO_id in range(self.total_cell_numbers['IO']):
-                key = (GC_id, IO_id)
-                if key not in self.processed_pairs:
-                    self.processed_pairs[key] = []
-                for GC_t in self.spike_times['GC'][0]:
-                    # LTP
-                    for IO_t in self.spike_times['IO'][0]:
-                        if (GC_t, IO_t) not in self.processed_pairs[key]:
-                            self.processed_pairs[key].add((GC_t, IO_t))
-                            delta_w = 0
-                            #LTD
-                            new_weight = self.weights_over_time[key][-1] + delta_w
-                            self.weights_over_time[key].append(round(new_weight, 4))
-                            idx = self.nc_index_map[(GC_id, PC_id)]
-                            self.ncs[f'GC_to_PC'][idx].weight[0] = new_weight
-
-        # For all other keys, just append the previous value to keep list lengths consistent
-        for key in self.weights_over_time:
-            if len(self.weights_over_time[key]) < len(self.weight_times):
-                self.weights_over_time[key].append(self.weights_over_time[key][-1])
-    '''
-    def old_update_weights(self, current_time):
-        """
-        Update weights over the last plot_interval ending at current_time.
-        - LTP: all GCs that fired in the interval [t0, t) potentiate all their GC->PC synapses.
-        - LTD: all IO spikes in [t0, t) trigger LTD on GC->PC synapses where
-            the GC fired within [io_t - ltd_window, io_t).
-        """
-
-
-        t0 = current_time - self.plot_interval
-        t1 = current_time
-        self.weight_times.append(int(t1))
-
-
-
-        # ---------- LTP: all GC spikes in [t0, t1) ----------
-        for gc_id, spikes in enumerate(self.spike_times['GC']):
-            print(f"gc spikes = {[ts.to_python() for ts in spikes]}")
-            
-            recent_spikes = [ts for ts in spikes if t0 <= ts < t1]
-            print(f"recent GC spikes = {recent_spikes}")
-            if not recent_spikes:
-                continue
-            # If at least one spike in interval, do one LTP update
-            for pc_id in self.pre_to_post['GC_to_PC'][gc_id]:
-                idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
-                nc = self.ncs['GC_to_PC'][idx]
-                w_new = min(self.w_max, nc.weight[0] + self.ltp_amount)
-                nc.weight[0] = w_new
-                self.weights_over_time[(gc_id, pc_id)].append(round(w_new, 6))
-
-        # ---------- LTD: all IO spikes in [t0, t1) ----------
-        for io_id, spikes in enumerate(self.spike_times['IO']):
-            print(f"io spikes = {[ts for ts in spikes]}")
-            io_recent = [ts for ts in spikes if t0 <= ts < t1]
-            print(f"recent IO spikes = {io_recent}")
-            for io_t in io_recent:
-                for pc_id in self.pre_to_post['IO_to_PC'][io_id]:
-                    for gc_id in self.post_to_pre['GC_to_PC'][pc_id]:
-                        # GC spikes in the LTD window relative to this IO event
-                        gc_window = [ts for ts in self.spike_times['GC'][gc_id]
-                                    if io_t - self.ltd_window < ts < io_t]
-                        if not gc_window:
-                            continue
-                        total_ltd = sum(self.ltd_max * np.exp(-(io_t - ts) / self.ltd_tau_ms)
-                                        for ts in gc_window)
-                        idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
-                        nc = self.ncs['GC_to_PC'][idx]
-                        w_new = max(self.w_min, nc.weight[0] - total_ltd)
-                        nc.weight[0] = w_new
-                        self.weights_over_time[(gc_id, pc_id)].append(round(w_new, 6))
-
-        # ---------- Keep vectors aligned ----------
-        initial_weight = 0
-        for spec in self.connection_specs:
-            pre_group, post_group, label, e_rev, weight, tau, delay, sparsity, grouped = spec
-            if label == 'GC_to_PC':
-                initial_weight = weight
-        for key, ws in self.weights_over_time.items():
-            #print(f"key = {key} weight = {ws}")
-            if len(ws) < len(self.weight_times):
-                ws.append(ws[-1] if ws else initial_weight)
 
     def get_new_spikes(self, cell_type, population, index):
         vec = self.spike_times[cell_type][population][index]
@@ -2216,26 +2119,21 @@ class Cerebellum:
         self.last_index[cell_type][population][index] = len(all_spikes)
         return new_spikes
 
-
     def update_weights(self, current_time):
-        """Update synaptic weights based on spikes in the last plot_interval."""
-
         self.weight_times.append(int(current_time))
+        interval_start = current_time - self.plot_interval
 
-        # --- Parameters ---
-        A_plus = 0.01        # fixed LTP increment
-        A_minus = 0.02       # max LTD decrement
-        tau_LTD = 100.0      # ms decay constant
-
-        # --- Gather new GC spikes ---
+        # --- Gather new GC spikes (for LTP, only current interval) (for LTD, current + previous interval) ---
         gc_spikes = {}
-        for pop in range(self.cell_types_numbers['GC'][0]):      # usually 1
+        gc_spikes_for_LTD = {}
+        for pop in range(self.cell_types_numbers['GC'][0]):
             for gc_id in range(self.cell_types_numbers['GC'][1]):
                 new_spikes = self.get_new_spikes('GC', pop, gc_id)
                 if new_spikes:
                     gc_spikes[gc_id] = new_spikes
+                gc_spikes_for_LTD[gc_id] = new_spikes + self.gc_spikes_last_interval.get(gc_id, []) if self.gc_spikes_last_interval else self.gc_spikes_last_interval
 
-        # --- Gather new IO spikes ---
+        # --- Gather IO spikes (current interval only) ---
         io_spikes = {}
         for pop in range(self.cell_types_numbers['IO'][0]):      # per actuator-direction
             for io_id in range(self.cell_types_numbers['IO'][1]):
@@ -2243,46 +2141,41 @@ class Cerebellum:
                 if new_spikes:
                     io_spikes[(pop, io_id)] = new_spikes
 
-        # --- Apply LTP (per GC spike) ---
-        for gc_id, gc_times in gc_spikes.items():
-            for gc_t in gc_times:
-                for pc_id in range(self.total_cell_numbers['PC']):
-                    key = (gc_id, pc_id)
-                    if key not in self.weights_over_time:
-                        self.weights_over_time[key] = [
-                            self.ncs['GC_to_PC'][self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]].weight[0]
-                        ]
-                    # LTP: fixed increase
-                    new_weight = self.weights_over_time[key][-1] + A_plus
-                    self.weights_over_time[key].append(round(new_weight, 4))
-                    idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
-                    self.ncs['GC_to_PC'][idx].weight[0] = new_weight
+        for gc_id in range(self.total_cell_numbers['GC']):
+            for pc_id in range(self.total_cell_numbers['PC']):
+                key = (gc_id, pc_id)
+                    
+                # Get last weight
+                if key not in self.weights_over_time:
+                    last_weight = self.ncs['GC_to_PC'][self.nc_index_map['GC_to_PC'][key]].weight[0]
+                    self.weights_over_time[key] = [last_weight]
+                else:
+                    last_weight = self.weights_over_time[key][-1]
+                
+                delta_w = 0.0
 
-        # --- Apply LTD (per IO spike) ---
-        for (pop, io_id), io_times in io_spikes.items():
-            for io_t in io_times:
-                # LTD: check all GCs that spiked before this IO spike
-                for gc_id, gc_times in gc_spikes.items():
-                    for gc_t in gc_times:
-                        delta_t = io_t - gc_t
-                        if 0 < delta_t <= tau_LTD:  # within window
-                            for pc_id in range(self.total_cell_numbers['PC']):
-                                key = (gc_id, pc_id)
-                                if key not in self.weights_over_time:
-                                    self.weights_over_time[key] = [
-                                        self.ncs['GC_to_PC'][self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]].weight[0]
-                                    ]
-                                # LTD: exponential decay
-                                delta_w = -A_minus * np.exp(-delta_t / tau_LTD)
-                                new_weight = self.weights_over_time[key][-1] + delta_w
-                                self.weights_over_time[key].append(round(new_weight, 4))
-                                idx = self.nc_index_map['GC_to_PC'][(gc_id, pc_id)]
-                                self.ncs['GC_to_PC'][idx].weight[0] = new_weight
+                # LTP: fixed increment if GC spiked
+                if gc_id in gc_spikes:
+                    delta_w += self.A_plus  # add once per interval
+                
+                # LTD: timing-dependent for IO spikes
+                for (pop, io_id), io_times in io_spikes.items():
+                    pc_start = pop * self.cell_types_numbers['PC'][1]
+                    pc_end   = (pop + 1) * self.cell_types_numbers['PC'][1]
+                    if pc_start <= pc_id < pc_end:   # restrict LTD to local actuator PCs
+                        for io_t in io_times:
+                            for gc_t in gc_spikes_for_LTD.get(gc_id, []):
+                                dt = io_t - gc_t
+                                if 0 < dt <= self.tau_LTD:
+                                    delta_w += -self.A_minus * np.exp(-dt / self.tau_LTD)
 
-        # --- Keep lists consistent (keys without updates) ---
-        for key in self.weights_over_time:
-            if len(self.weights_over_time[key]) < len(self.weight_times):
-                self.weights_over_time[key].append(self.weights_over_time[key][-1])
+                new_weight = max(0, min(1, last_weight + delta_w))
+                idx = self.nc_index_map['GC_to_PC'][key]
+                self.ncs['GC_to_PC'][idx].weight[0] = new_weight
+
+                self.weights_over_time[key].append(round(new_weight, 4))
+        
+        self.gc_spikes_last_interval = gc_spikes.copy()
 
     def update_plots(self, current_time, goal=None, action=None):
         '''
@@ -2330,7 +2223,7 @@ class Cerebellum:
                 if self.axs_input[0].get_xlim() != new_xlim:
                     self.axs_input[0].set_xlim(*new_xlim)
 
-        for plot_id, _ in enumerate(self.actuators):
+        for plot_id in range(self.num_of_plots):
             # Membrane potential plot
             for ct in self.cell_types:
                 if ct != 'PN' and ct != 'GC':
@@ -2370,67 +2263,21 @@ class Cerebellum:
                     all_spikes.extend(spikes)
                     y_current -= 1  # decrement y for next neuron
 
-                '''
-                # Update rate lines for this half
-                if all_spikes:
-                    bins = np.arange(0, np.array(self.t_vec)[-1] + self.bin_width_firing_rate, self.bin_width_firing_rate)
-                    hist, edges = np.histogram(all_spikes, bins=bins)
-                    if np.any(hist):
-                        rate = hist / (len(indices) * self.bin_width_firing_rate / 1000.0)  # Hz
-                        spike_rate_max = 1000.0 / 50  # adjust as needed
-                        rate_scaled = (rate) / (spike_rate_max + 1e-9)
-                        rate_scaled = rate_scaled * (len(indices) - 1) + y_current + 1
-                        self.rate_lines[ct][plot_id].set_data(edges[1:], rate_scaled)
-                    else:
-                        self.rate_lines[ct][plot_id].set_data([], [])
-                '''
-
             # Set xlim
             new_xlim = max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time))
             if self.axs_plot[self.row_spike][plot_id].get_xlim() != new_xlim:
                 self.axs_plot[self.row_spike][plot_id].set_xlim(*new_xlim)
 
-            '''
-            for ct in self.cell_types:
-                if ct != 'PN' and ct != 'GC':
-                    all_spikes = []
-                    spike_block = self.spike_times[ct][plot_id]
-                        
-                    for k in range(self.cell_types_numbers[ct][1]):
-                        y_val = y_base - k
-                        spikes = np.array(spike_block[k].to_python())
-                        y_vals = np.ones_like(spikes) * y_val
-                        self.raster_lines[ct][plot_id][k].set_data(spikes, y_vals)
-                        all_spikes.extend(spikes)
-                    # Rate lines
-                    if all_spikes:
-                        bins = np.arange(0, np.array(self.t_vec)[-1] + self.bin_width_firing_rate, self.bin_width_firing_rate)
-                        hist, edges = np.histogram(all_spikes, bins=bins)
-                        if np.any(hist):  # Only proceed if there's at least one spike
-                            rate = hist / (self.cell_types_numbers[ct][1] * self.bin_width_firing_rate / 1000.0)
-                            bin_ends = edges[1:]
-                            spike_rate_max = 1000.0 / 50#self.stim_intervals[ct] # Hz
-                            rate_scaled = (rate) / (spike_rate_max + 1e-9)
-                            rate_scaled = rate_scaled * (self.cell_types_numbers[ct][1] - 1) + y_base - self.cell_types_numbers[ct][1] + 1
-                            self.rate_lines[ct][plot_id].set_data(bin_ends, rate_scaled)
-                        else:
-                            self.rate_lines[ct][plot_id].set_data([], [])          
-                    y_base -= self.cell_types_numbers[ct][1]
-            new_xlim = max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time))
-            if self.axs_plot[self.row_spike][plot_id].get_xlim() != new_xlim:
-                self.axs_plot[self.row_spike][plot_id].set_xlim(*new_xlim)
-            '''
-            '''
             # Weight plot
-            for ct in self.weight_cell_types:
-                for msn_id in range(self.cell_types_numbers[ct][1]):
-                    for cor_id in range(self.cell_types_numbers['Cor'][1]):
-                        self.weight_lines[ct][plot_id][msn_id].set_data(self.weight_times, self.weights_over_time[(ct, action_id, msn_id, selected_goal_index, cor_id)])
-            self.activation_lines[plot_id].set_data(self.activation_times, self.activation_over_time[action])
+            for pc_idx in range(self.cell_types_numbers['PC'][1]):
+                pc_id = plot_id * self.cell_types_numbers['PC'][1] + pc_idx
+                for gc_id, line in enumerate(self.weight_lines[plot_id][pc_idx]):
+                    key = (gc_id, pc_id)
+                    if key in self.weights_over_time:
+                        line.set_data(self.weight_times, self.weights_over_time[key])
             new_xlim = 0, max(self.plot_interval, int(current_time))
             if self.axs_plot[self.row_weights][plot_id].get_xlim() != new_xlim:
                 self.axs_plot[self.row_weights][plot_id].set_xlim(*new_xlim)
-        '''
     
 
 #--- Functions ------------------------------------------------------------------------------------------------------------------------------------------------#
