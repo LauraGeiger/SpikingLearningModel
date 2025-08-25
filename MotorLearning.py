@@ -761,8 +761,8 @@ class MotorLearning:
                 desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
                 desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
                 flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
-                touch_sensor_values_on = [0.2, 0.8, 0.4, 0.0, 0.0]
-                touch_sensor_values_off = [0.6, 0.0, 0.0, 0.0, 0.0]
+                touch_sensor_values_on = [1.0, 0.8, 0.4, 0.0, 0.0]
+                touch_sensor_values_off = [0.0, 0.0, 0.0, 0.0, 0.0]
                 self.cerebellum.update_input_stimuli(current_time=h.t, desired_grasp_type=desired_grasp_type, desired_joints=desired_joints, desired_actuators=desired_actuators, flex_sensor_values=flex_sensor_values, touch_sensor_values=touch_sensor_values_on)
 
                 self.update_GUI_goals_actions()
@@ -1731,7 +1731,7 @@ class Cerebellum:
             ('GC', 'DCN', 'GC_to_DCN',   0, 0.05, 10, 2, 0, 0),  # excitatory
             ('GC', 'PC',  'GC_to_PC',    0, 0.05, 10, 1, 0, 0),  # excitatory
             ('IO', 'PC',  'IO_to_PC',    0, 0.0,  10, 1, 0, 1),  # excitatory
-            ('PC', 'DCN', 'PC_to_DCN', -85, 20.0, 20, 1, 0, 1)   # inhibitory
+            ('PC', 'DCN', 'PC_to_DCN', -85, 2.0,  20, 1, 0, 1)   # inhibitory
         ]
         
         self.num_of_plots = min(6, len(self.actuators))
@@ -1760,8 +1760,8 @@ class Cerebellum:
 
         # --- Parameters ---
         self.A_plus = 0.01        # fixed LTP increment
-        self.A_minus = 0.02       # max LTD decrement
-        self.tau_LTD = 50.0       # ms decay constant
+        self.A_minus = 0.05       # max LTD decrement
+        self.tau_LTD = 70.0       # ms decay constant
 
         
         self._init_cells()
@@ -1781,23 +1781,6 @@ class Cerebellum:
             ] 
             for cell_type in self.cell_types
         }
-    
-    def old_init_spike_detectors(self):
-        # Spike detectors and vectors
-        self.spike_times = {
-            cell_type: [
-                [h.Vector() for index in range(self.cell_types_numbers[cell_type][1])]
-                for population in range(self.cell_types_numbers[cell_type][0])
-            ] 
-            for cell_type in self.cell_types
-        }
-
-        for cell_type in self.cell_types:
-            for population in range(self.cell_types_numbers[cell_type][0]):
-                for index, cell in enumerate(self.cells[cell_type][population]):
-                    apc = h.APCount(cell(0.5))
-                    apc.record(self.spike_times[cell_type][population][index])
-                    self.apc_refs.append(apc)
     
     def _init_spike_detectors(self):
         # Spike detectors and vectors
@@ -1945,35 +1928,40 @@ class Cerebellum:
         self.axs_plot[self.row_potential][0].set_ylabel('Membrane potential (mV)')
         self.axs_input[0].set_ylabel('Membrane potential (mV)')
         self.mem_lines = {ct: [] for ct in self.cell_types}
+        self.mem_lines_pos = {ct: [[] for _ in range(self.num_of_plots)] for ct in self.cell_types}
+        self.mem_lines_neg = {ct: [[] for _ in range(self.num_of_plots)] for ct in self.cell_types}
 
         for j, ct in enumerate(self.cell_types):
             if ct == 'PN' or ct == 'GC':
                 for n in range(self.cell_types_numbers[ct][1]):
                     label = ct if n==0 else ''
-                    line, = self.axs_input[0].plot([], [], f'C{j}', label=label)
+                    line, = self.axs_input[0].plot([], [], f'C{j}', label=label, alpha=0.6)
                     self.mem_lines[ct].append(line)
         self.axs_input[0].set_xlim(0, self.plot_interval)
         self.axs_input[0].set_ylim(-85, 65)
         self.axs_input[0].xaxis.set_major_formatter(ms_to_s)
         self.axs_input[0].legend(loc='upper right')
 
-        for i, ch in enumerate(range(self.num_of_plots)):
+        for plot_id in range(self.num_of_plots):
             for j, ct in enumerate(self.cell_types):
                 if ct != 'PN' and ct != 'GC':
-                    avg_line, = self.axs_plot[self.row_potential][i].plot([], [], f'C{j}', label=ct)
-                    self.mem_lines[ct].append(avg_line)
+                    for n in range(self.cell_types_numbers[ct][1] // 2):
+                        label = ct if n==0 else ''
+                        line_pos, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j}', label=label, alpha=0.6)
+                        line_neg, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j}', linestyle='dashed', label=label, alpha=0.6)
+                        self.mem_lines_pos[ct][plot_id].append(line_pos)
+                        self.mem_lines_neg[ct][plot_id].append(line_neg)
 
-            self.axs_plot[self.row_potential][i].set_title(f'{self.joints[ch]}')
-            self.axs_plot[self.row_potential][i].set_xlim(0, self.plot_interval)
-            self.axs_plot[self.row_potential][i].set_ylim(-85, 65)
-            self.axs_plot[self.row_potential][i].xaxis.set_major_formatter(ms_to_s)
+            self.axs_plot[self.row_potential][plot_id].set_title(f'{self.joints[plot_id]}')
+            self.axs_plot[self.row_potential][plot_id].set_xlim(0, self.plot_interval)
+            self.axs_plot[self.row_potential][plot_id].set_ylim(-85, 65)
+            self.axs_plot[self.row_potential][plot_id].xaxis.set_major_formatter(ms_to_s)
         self.axs_plot[self.row_potential][-1].legend(loc='upper right')
 
     def _init_spike_plot(self):
         # Spike raster plot and rate lines
         self.axs_plot[self.row_spike][0].set_ylabel('Spike raster')
         self.raster_lines = {ct: [[] for _ in range(self.num_of_plots)] for ct in self.cell_types}
-        #self.rate_lines = {ct: [] for ct in self.cell_types}
         
         self.axs_input[1].set_ylabel('Spike raster')
         self.raster_lines_input = {ct: [] for ct in self.cell_types if ct == 'PN' or ct == 'GC'}
@@ -1986,8 +1974,6 @@ class Cerebellum:
                     line, = self.axs_input[1].plot([], [], f'C{j}.', markersize=3)
                     self.raster_lines_input[ct].append(line)
                     self.total_cells_input += 1
-                #rate_line, = self.axs_input[1].step([], [], f'C{j}', label=ct)
-                #self.rate_lines[ct].append(rate_line)
             
         y_max = self.total_cells_input + 1.5
         self.axs_input[1].set_ylim(0.5, y_max)
@@ -2012,16 +1998,11 @@ class Cerebellum:
             for j, ct in enumerate(self.cell_types):
                 if ct != 'PN' and ct != 'GC':
                     self.raster_lines[ct][i] = []
-                    for _ in range(self.cell_types_numbers[ct][1]):
+                    for k in range(self.cell_types_numbers[ct][1]):
                         line, = self.axs_plot[self.row_spike][i].plot([], [], f'C{j}.', markersize=3)
                         self.raster_lines[ct][i].append(line)
                         self.total_cells += 1
 
-                    #rate_line, = self.axs_plot[self.row_spike][i].step([], [], f'C{j}')
-                    #self.rate_lines[ct].append(rate_line)
-            self.axs_plot[self.row_spike][i].plot([], [], color='black', linestyle='dotted', label=f'Spikes')
-            self.axs_plot[self.row_spike][i].plot([], [], color='black', label=f'Relative\nrate')
-            
             y_max = self.total_cells + 1
             self.axs_plot[self.row_spike][i].set_ylim(0.5, y_max)
             yticks = []
@@ -2037,7 +2018,7 @@ class Cerebellum:
                         cumulative += n_cells
             
             # Horizontal line to split positive and negative parts
-            self.axs_plot[self.row_spike][i].axhline(y=y_max/2, color="black", linestyle="--", linewidth=1)
+            self.axs_plot[self.row_spike][i].axhline(y=y_max/2, color="black", linestyle='solid', linewidth=1)
 
             self.axs_plot[self.row_spike][i].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_spike][i].set_yticks(yticks)
@@ -2052,12 +2033,13 @@ class Cerebellum:
 
         for idx in range(self.num_of_plots):
             for pc_id in range(self.cell_types_numbers['PC'][1]):
+                style = 'solid' if pc_id < self.cell_types_numbers['PC'][1] / 2 else 'dashed'
                 for gc_id in range (self.total_cell_numbers['GC']):
-                    line, = self.axs_plot[self.row_weights][idx].step([], [], f'C{1}', where='post')
+                    line, = self.axs_plot[self.row_weights][idx].step([], [], f'C{2}', linestyle=style, where='post', alpha=0.6)
                     self.weight_lines[idx][pc_id].append(line)
 
             self.axs_plot[self.row_weights][idx].set_xlim(0, self.plot_interval)
-            self.axs_plot[self.row_weights][idx].set_ylim(-0.1, 1.1)
+            self.axs_plot[self.row_weights][idx].set_ylim(-0.05, 1.05)
             self.axs_plot[self.row_weights][idx].xaxis.set_major_formatter(ms_to_s)
             self.axs_plot[self.row_weights][idx].set_xlabel('Simulation\ntime (s)')
         #self.axs_plot[self.row_weights][-1].legend(loc='upper right')
@@ -2093,7 +2075,6 @@ class Cerebellum:
             touch_on = touch_sensor_values_on[finger_idx]
             touch_off = touch_sensor_values_off[finger_idx]
 
-            print(f"desired joint = {desired_joint} touch on = {touch_on} touch off = {touch_off}")
             # Check mismatches
             if desired_joint == 1:
                 if (touch_off > 0 or touch_on == 0):
@@ -2121,7 +2102,6 @@ class Cerebellum:
 
     def update_weights(self, current_time):
         self.weight_times.append(int(current_time))
-        interval_start = current_time - self.plot_interval
 
         # --- Gather new GC spikes (for LTP, only current interval) (for LTD, current + previous interval) ---
         gc_spikes = {}
@@ -2156,25 +2136,35 @@ class Cerebellum:
 
                 # LTP: fixed increment if GC spiked
                 if gc_id in gc_spikes:
-                    delta_w += self.A_plus  # add once per interval
+                    for gc_t in gc_spikes.get(gc_id, []):
+                        delta_w += self.A_plus 
+                        if key == (0,0): print(f"{key} LTP gc_t={gc_t} delta_w={delta_w}")
+                        if key == (0,5): print(f"{key} LTP gc_t={gc_t} delta_w={delta_w}")
                 
                 # LTD: timing-dependent for IO spikes
                 for (pop, io_id), io_times in io_spikes.items():
                     pc_start = pop * self.cell_types_numbers['PC'][1]
                     pc_end   = (pop + 1) * self.cell_types_numbers['PC'][1]
-                    if pc_start <= pc_id < pc_end:   # restrict LTD to local actuator PCs
+                    pc_half  = self.cell_types_numbers['PC'][1] // 2
+                    io_half  = self.cell_types_numbers['IO'][1] // 2
+                    if io_id < io_half:  # first half of IO cells → LTD on positive PCs
+                        pc_range = range(pc_start, pc_start + pc_half)
+                    else:                # second half of IO cells → LTD on negative PCs
+                        pc_range = range(pc_start + pc_half, pc_end)
+
+                    if pc_id in pc_range: 
                         for io_t in io_times:
                             for gc_t in gc_spikes_for_LTD.get(gc_id, []):
                                 dt = io_t - gc_t
                                 if 0 < dt <= self.tau_LTD:
                                     delta_w += -self.A_minus * np.exp(-dt / self.tau_LTD)
-
+                                    if key == (0,0): print(f"{key} LTD io {io_id} pop={pop} pc_start={pc_start} pc_end={pc_end} t={io_t} gc t={gc_t} dt={dt} delta_w={delta_w}")
+                                    if key == (0,5): print(f"{key} LTD io {io_id} pop={pop} pc_start={pc_start} pc_end={pc_end} t={io_t} gc t={gc_t} dt={dt} delta_w={delta_w}")
                 new_weight = max(0, min(1, last_weight + delta_w))
                 idx = self.nc_index_map['GC_to_PC'][key]
                 self.ncs['GC_to_PC'][idx].weight[0] = new_weight
 
                 self.weights_over_time[key].append(round(new_weight, 4))
-        
         self.gc_spikes_last_interval = gc_spikes.copy()
 
     def update_plots(self, current_time, goal=None, action=None):
@@ -2217,7 +2207,6 @@ class Cerebellum:
             if ct == 'PN' or ct == 'GC':
                 voltages = np.array([(self.recordings[ct][0][j]) for j in range(self.cell_types_numbers[ct][1])])
                 for n, voltage in enumerate(voltages):
-                    #avg_voltage = np.mean(voltages, axis=0)
                     self.mem_lines[ct][n].set_data(np.array(self.t_vec), voltage)
                 new_xlim = (max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
                 if self.axs_input[0].get_xlim() != new_xlim:
@@ -2228,8 +2217,13 @@ class Cerebellum:
             for ct in self.cell_types:
                 if ct != 'PN' and ct != 'GC':
                     voltages = np.array([(self.recordings[ct][plot_id][j]) for j in range(self.cell_types_numbers[ct][1])])
-                    avg_voltage = np.mean(voltages, axis=0)
-                    self.mem_lines[ct][plot_id].set_data(np.array(self.t_vec), avg_voltage)
+                    voltages_pos = voltages[:len(voltages) // 2]
+                    voltages_neg = voltages[len(voltages) // 2:]
+                    #avg_voltage = np.mean(voltages, axis=0)
+                    for n, voltage in enumerate(voltages_pos):
+                        self.mem_lines_pos[ct][plot_id][n].set_data(np.array(self.t_vec), voltage)
+                    for n, voltage in enumerate(voltages_neg):
+                        self.mem_lines_neg[ct][plot_id][n].set_data(np.array(self.t_vec), voltage)
                     new_xlim = (max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time)))
                     if self.axs_plot[self.row_potential][plot_id].get_xlim() != new_xlim:
                         self.axs_plot[self.row_potential][plot_id].set_xlim(*new_xlim)
