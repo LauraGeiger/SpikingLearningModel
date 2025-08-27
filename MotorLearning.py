@@ -29,14 +29,21 @@ h.load_file("stdrun.hoc")
 
 class MotorLearning:
 
-    def __init__(self, no_of_joints=6, basal_ganglia=True, cerebellum=True, grasp_types=None, all_joints=None, all_actuators=None):
+    def __init__(self, no_of_joints=6, basal_ganglia_required=True, cerebellum_required=True, grasp_types=None, all_joints=None, all_actuators=None):
 
-        joints = all_joints[:no_of_joints]
-        actuators = all_actuators[:no_of_joints]
-        joint_actuator_indices = {i: [i] for i in range(no_of_joints)}
-        grasp_type_joint_indices_mapping = {
-            "10": "1" * min(3, no_of_joints) + "0" * (no_of_joints - min(3, no_of_joints)),
-            "01": "1" * no_of_joints
+        self.no_of_joints = no_of_joints
+        self.basal_ganglia_required = basal_ganglia_required
+        self.cerebellum_required = cerebellum_required
+        self.grasp_types = grasp_types
+        self.all_joints = all_joints
+        self.all_actuators = all_actuators
+
+        self.joints = self.all_joints[:self.no_of_joints]
+        self.actuators = self.all_actuators[:self.no_of_joints]
+        self.joint_actuator_indices = {i: [i] for i in range(self.no_of_joints)}
+        self.grasp_type_joint_indices_mapping = {
+            "10": "1" * min(3, self.no_of_joints) + "0" * (self.no_of_joints - min(3, self.no_of_joints)),
+            "01": "1" * self.no_of_joints
         }
         '''
         if no_of_joints == 4:
@@ -101,22 +108,24 @@ class MotorLearning:
             }
         '''
 
-        grasp_type_joint_table = create_goal_action_table(indices_mapping=grasp_type_joint_indices_mapping, goals=grasp_types, actions=joints)
-        joint_actuator_indices_mapping = create_goal_action_indices_mapping(indices=joint_actuator_indices, goals=joints, actions=actuators)
-        joint_actuator_table = create_goal_action_table(indices_mapping=joint_actuator_indices_mapping, goals=joints, actions=actuators)
+        self.grasp_type_joint_table = create_goal_action_table(indices_mapping=self.grasp_type_joint_indices_mapping, goals=self.grasp_types, actions=self.joints)
+        self.joint_actuator_indices_mapping = create_goal_action_indices_mapping(indices=self.joint_actuator_indices, goals=self.joints, actions=self.actuators)
+        self.joint_actuator_table = create_goal_action_table(indices_mapping=self.joint_actuator_indices_mapping, goals=self.joints, actions=self.actuators)
 
-        if basal_ganglia:
-            self.loops = [
-                BasalGangliaLoop('MotorLoop', input=joints, output=actuators, goal_action_table=joint_actuator_table, actions_to_plot=6), 
-                BasalGangliaLoop('PrefrontalLoop', input=grasp_types, output=joints, binary_input=True, single_goal=True, goal_action_table=grasp_type_joint_table, actions_to_plot=6)
-            ] # loops ordered from low-level to high-level
-        if cerebellum:
-            self.cerebellum = Cerebellum(grasp_types=grasp_types, joints=joints, actuators=actuators)
+        self.plot_interval = 200  # ms
 
+        if self.basal_ganglia_required:
+            bg_ml = BasalGangliaLoop('MotorLoop', input=self.joints, output=self.actuators, goal_action_table=self.joint_actuator_table, actions_to_plot=6, plot_interval=self.plot_interval)
+            bg_pl = BasalGangliaLoop('PrefrontalLoop', input=self.grasp_types, output=self.joints, binary_input=True, single_goal=True, goal_action_table=self.grasp_type_joint_table, actions_to_plot=6, plot_interval=self.plot_interval, child_loop=bg_ml)
+            self.loops = [bg_ml, bg_pl] # loops ordered from low-level to high-level
+        if self.cerebellum_required:
+            self.cerebellum = Cerebellum(grasp_types=self.grasp_types, joints=self.joints, actuators=self.actuators, plot_interval=self.plot_interval)
+
+        self.learned_grasp_type_joints_mapping = {grasp_type: [] for grasp_type in self.grasp_types}
+        self.learned_joint_actuator_mapping = {joint: None for joint in self.joints}
         self.buttons = {}
         self.paused = False
         self.hw_connected = False
-        self.plot_interval = 100  # ms
         self.simulation_stop_time = 10000 # ms
         self.iteration = 0
         self.ani = None
@@ -130,12 +139,14 @@ class MotorLearning:
         self.num_flex_sensors = 6
         self.num_touch_sensors = 5
         self.actuators_flexors = [4, 1, 6, 8, 10, 12]
-        if len(self.loops[0].actions_names) < 3:
-            self.actuators_flexors = self.actuators_flexors[1:1+len(self.loops[0].actions_names)]
+        self.actuators_flexors = self.actuators_flexors[:self.no_of_joints]
         #random.shuffle(self.actuators_flexors)
         self.actuators_extensors = [2, 7, 9, 11, 13]
-        self.duration_actuators = 0.3 # s
-        self.delay = 0.5 # s
+        self.duration_actuators = 300 # ms
+        self.duration_flexors = 2000 # ms
+        self.delay = 500 # ms
+        self.joint_duration_mapping = {joint: self.duration_flexors for joint in self.joints}
+        print(self.joint_duration_mapping)
 
         # Valve - Actuators
         #  1 - Thumb flexor
@@ -152,23 +163,10 @@ class MotorLearning:
         # 12 - Pinky finger flexor
         # 13 - Pinky finger extensor
 
-        self._init_basal_ganglia_loops()
-        self._init_cerebellum()
         self._init_plotting()
         self._init_simulation()
 
         self.run_simulation()
-    
-    def _init_basal_ganglia_loops(self):
-        for idx, loop in enumerate(self.loops):
-            loop.plot_interval = self.plot_interval
-            loop.bin_width_firing_rate = self.plot_interval # ms
-            if idx > 0:
-                loop.set_child_loop(self.loops[idx-1])
-
-    def _init_cerebellum(self):
-        self.cerebellum.plot_interval = self.plot_interval
-        self.cerebellum.bin_width_firing_rate = self.plot_interval # ms
 
     def _init_plotting(self):
         plt.ion()
@@ -327,7 +325,7 @@ class MotorLearning:
             except Exception: None
 
         print("Reset")
-        create_MotorLearning(no_of_joints=len(self.loops[0].goals_names))
+        self.__init__(self.no_of_joints, self.basal_ganglia_required, self.cerebellum_required, self.grasp_types, self.all_joints, self.all_actuators)
 
     def connect_hw(self, event=None):
         successful = True
@@ -380,26 +378,27 @@ class MotorLearning:
             self.buttons['hw'].label.set_text('Disconnect\nHW' if self.hw_connected else 'Connect HW')
 
     def learn_from_motor_babbling(self, event):
-        if self.hw_connected:
-            previous_action = None
-            previous_performed_action = None
-            
-            for action in self.loops[0].actions:
-                for trial in range(2):
-                    h.continuerun(h.t + self.plot_interval)
-                    #action = random.choice(self.loops[0].actions)
+        
+        previous_action = None
+        previous_performed_action = None
+        
+        for action in self.loops[0].actions:
+            for trial in range(2):
+                h.continuerun(h.t + self.plot_interval)
+                #action = random.choice(self.loops[0].actions)
+                if self.hw_connected:
                     self.perform_action(action)
-                    if self.recorded_sensor_data_flex: 
-                        self.analyze_sensor_data_flex()
-                    self.update_GUI_goals_actions()
-                    if previous_action and previous_performed_action:
-                        self.loops[0].update_weights(current_time=h.t, goal=previous_performed_action, action=previous_action)
-                        self.loops[0].update_plots(current_time=h.t, goal=previous_performed_action, action=previous_action)
-                    
-                    self.loops[0].cortical_input_stimuli(current_time=h.t, goal=self.performed_action)
-                    previous_action = action
-                    previous_performed_action = self.performed_action
-                time.sleep(1)
+                if self.recorded_sensor_data_flex: 
+                    self.analyze_sensor_data_flex()
+                self.update_GUI_goals_actions()
+                if previous_action and previous_performed_action:
+                    self.loops[0].update_weights(current_time=h.t, goal=previous_performed_action, action=previous_action)
+                    self.loops[0].update_plots(current_time=h.t, goal=previous_performed_action, action=previous_action)
+                
+                self.loops[0].cortical_input_stimuli(current_time=h.t, goal=self.performed_action)
+                previous_action = action
+                previous_performed_action = self.performed_action
+            time.sleep(1)
 
     def learn_from_demonstration(self): None
 
@@ -685,20 +684,20 @@ class MotorLearning:
             for actuator in self.actuators_extensors + self.actuators_flexors:
                 action_command_parts.append(f"0-{actuator}-i")
             for actuator in self.actuators_extensors + self.actuators_flexors:
-                action_command_parts.append(f"{self.duration_actuators*1000}-{actuator}-h")
+                action_command_parts.append(f"{self.duration_actuators}-{actuator}-h")
 
             # Control individual flexors based on selected action
             for i, bit in enumerate(action):
                 if bit == '1':
                     flexor = self.actuators_flexors[i]
                     # Inlet position
-                    action_command_parts.append(f"{(self.duration_actuators+self.delay)*1000}-{flexor}-i")
+                    action_command_parts.append(f"{(self.duration_actuators+self.delay)}-{flexor}-i")
 
             for i, bit in enumerate(action):
                 if bit == '1':
                     flexor = self.actuators_flexors[i]
                     # Hold position
-                    action_command_parts.append(f"{(self.duration_actuators+self.delay+duration_flexors)*1000}-{flexor}-h")
+                    action_command_parts.append(f"{(self.duration_actuators+self.delay+duration_flexors)}-{flexor}-h")
 
             action_command = '/'.join(action_command_parts) + '/'
         
@@ -726,7 +725,45 @@ class MotorLearning:
             self.read_sensor_data(duration=duration+2)
             self.ser_exo.write(start_stop_command.encode())
             time.sleep(2)
+    
+    def update_joint_duration_mapping(self, time_correction):
+        None
+        #self.joint_duration_mapping = 
 
+    def calculate_input_output_mapping(self, weights_over_time):
+        sums_counts = {}
+        pre_post_pop_mapping = {}
+        best_avg = {}
+
+        for (post_group, population_post_cell, post_cell_id, population_pre_cell, pre_cell_id), weight in weights_over_time.items():
+            if post_group != "MSNd":
+                continue
+            
+            key = (population_pre_cell, population_post_cell)
+            
+            # keep running sums and counts to compute averages on the fly
+            if key not in sums_counts:
+                sums_counts[key] = [0.0, 0]  # [sum, count]
+            sums_counts[key][0] += weight[-1]
+            sums_counts[key][1] += 1
+
+        #print(sums_counts)
+        # now figure out max averages in one go
+        for (pre_pop, post_pop), (s, c) in sums_counts.items():
+            avg_w = s / c
+            if pre_pop not in pre_post_pop_mapping:
+                pre_post_pop_mapping[pre_pop] = [post_pop]
+                best_avg[pre_pop] = avg_w
+            else:
+                current_max = best_avg[pre_pop]
+                if avg_w > current_max:
+                    pre_post_pop_mapping[pre_pop] = [post_pop]
+                    best_avg[pre_pop] = avg_w
+                elif abs(avg_w - current_max) < 1e-9:  # handle ties
+                    pre_post_pop_mapping[pre_pop].append(post_pop)
+        print(best_avg)
+        return pre_post_pop_mapping
+                    
     def run_simulation(self):
         try:
             while True:
@@ -757,13 +794,14 @@ class MotorLearning:
                     loop.select_action()
 
                 # Cerebellum update input
-                desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
-                desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
-                desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
+                desired_grasp_type = '01' #self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
+                desired_joints = '111' #self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
+                desired_actuators = '111' #self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
                 flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
-                touch_sensor_values_on = [1.0, 0.8, 0.4, 0.0, 0.0]
-                touch_sensor_values_off = [0.0, 0.0, 0.0, 0.0, 0.0]
-                self.cerebellum.update_input_stimuli(current_time=h.t, desired_grasp_type=desired_grasp_type, desired_joints=desired_joints, desired_actuators=desired_actuators, flex_sensor_values=flex_sensor_values, touch_sensor_values=touch_sensor_values_on)
+                touch_sensor_values_on = [0.2, 0.8, 0.4, 0.0, 0.0]
+                touch_sensor_values_off = [0.4, 0.0, 0.0, 0.0, 0.0]
+                #self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, flex_sensor_values, touch_sensor_values_on)
+                self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators)
 
                 self.update_GUI_goals_actions()
 
@@ -785,10 +823,16 @@ class MotorLearning:
                 for loop in self.loops:
                     loop.update_weights(current_time=h.t)
                     loop.update_plots(current_time=h.t)
+                    map = self.calculate_input_output_mapping(loop.weights_over_time)
+                    print(f"{loop.name} {map}")
+                    last_weights = {key: weights[-1] for key, weights in loop.weights_over_time.items() if weights and key[0]}
+                    #print(f"{loop} {last_weights}")
 
                 # Cerebellum update weights and plot
                 self.cerebellum.update_weights(current_time=h.t)
                 self.cerebellum.update_plots(current_time=h.t)
+                time_correction = self.cerebellum.calculate_correction()
+                self.update_joint_duration_mapping(time_correction)
 
                 # Pause simulation
                 if int(h.t) % self.simulation_stop_time == 0:
@@ -838,7 +882,7 @@ class MotorLearning:
 
 class BasalGangliaLoop:
 
-    def __init__(self, name, input, output, binary_input=False, single_goal=False, goal_action_table=None, actions_to_plot=None):
+    def __init__(self, name, input, output, binary_input=False, single_goal=False, goal_action_table=None, actions_to_plot=None, plot_interval=None, child_loop=None):
         self.name = name
         self.goals_names = input
         self.goals = [''.join(bits) for bits in product('10', repeat=len(input))] # binary combination of all inputs
@@ -846,12 +890,13 @@ class BasalGangliaLoop:
         self.actions_names = output
         self.actions = [''.join(bits) for bits in product('10', repeat=len(output)) if any(bit == '1' for bit in bits)] # binary combination of all outputs
         self.selected_action = None
-        if actions_to_plot is not None:
-            self.actions_to_plot = len(self.actions) if len(self.actions) <= actions_to_plot else actions_to_plot
         self.binary_input = binary_input
         self.single_goal = single_goal
         self.goal_action_table = goal_action_table
-        self.child_loop = None
+        if actions_to_plot is not None:
+            self.actions_to_plot = len(self.actions) if len(self.actions) <= actions_to_plot else actions_to_plot
+        self.plot_interval = plot_interval
+        self.child_loop = child_loop
 
         self.cell_types_numbers = {'Cor':  [len(self.goals),   1], 
                                    'SNc':  [len(self.actions), 1], 
@@ -927,9 +972,6 @@ class BasalGangliaLoop:
                             }
         self.cor_nc_index_map = {} 
         self.apc_refs = []
-
-        self.plot_interval = None
-        self.bin_width_firing_rate = None
 
         self.buttons = {}
         self.rates = {}
@@ -1271,7 +1313,7 @@ class BasalGangliaLoop:
         rates_avg = []
         rates = []
         if window == None:
-            window = self.bin_width_firing_rate
+            window = self.plot_interval
         for a, _ in enumerate(self.actions):
             spikes_avg = 0
             spikes = []
@@ -1521,10 +1563,10 @@ class BasalGangliaLoop:
                     all_spikes.extend(spikes)
                 # Rate lines
                 if all_spikes:
-                    bins = np.arange(0, np.array(self.t_vec)[-1] + self.bin_width_firing_rate, self.bin_width_firing_rate)
+                    bins = np.arange(0, np.array(self.t_vec)[-1] + self.plot_interval, self.plot_interval)
                     hist, edges = np.histogram(all_spikes, bins=bins)
                     if np.any(hist):  # Only proceed if there's at least one spike
-                        rate = hist / (self.cell_types_numbers[ct][1] * self.bin_width_firing_rate / 1000.0)
+                        rate = hist / (self.cell_types_numbers[ct][1] * self.plot_interval / 1000.0)
                         bin_ends = edges[1:]
                         if ct == 'SNc':
                             spike_rate_max = 1000.0 / self.stim_intervals['SNc_burst'] # Hz
@@ -1617,7 +1659,6 @@ class BasalGangliaLoop:
         scalars = {
             #"N_actions": self.N_actions,
             "plot_interval": self.plot_interval,
-            "bin_width_firing_rate": self.bin_width_firing_rate,
             "n_spikes_SNc_burst": self.n_spikes_SNc_burst,
             "learning_rate": self.learning_rate,
             "expected_reward_value": self.expected_reward_value,
@@ -1679,19 +1720,18 @@ class BasalGangliaLoop:
 
 class Cerebellum:
 
-    def __init__(self, grasp_types, joints, actuators):
+    def __init__(self, grasp_types, joints, actuators, plot_interval):
 
         self.noise = 0
         self.apc_refs = []
-        self.plot_interval = None
-        self.bin_width_firing_rate = None
+        self.plot_interval = plot_interval
 
         N_flex = 6
         N_pressure = 5
         self.grasp_types = grasp_types
         self.joints = joints
         self.actuators = actuators
-        self.num_pontine = len(self.grasp_types) + len(self.joints) + len(self.actuators) + N_flex + N_pressure
+        self.num_pontine = len(self.grasp_types) + len(self.joints) + len(self.actuators) #+ N_flex + N_pressure
         self.num_granule = 50
         self.num_deep_cerebellar = 2 # 1 for positive correction, 1 for negative correction
         self.num_purkinje = self.num_deep_cerebellar * 4
@@ -1706,11 +1746,11 @@ class Cerebellum:
         self.total_cell_numbers = {cell: val[0] * val[1] for cell, val in self.cell_types_numbers.items()}
 
         self.stim_intervals = {
-            'PN'  : 1000 / 50, # Hz
+            'PN'  : 1000 / 30, # 30 Hz
             'GC'  : 0,
             'PC'  : 0, 
             'DCN' : 0,
-            'IO'  : 1000 / 10 # Hz
+            'IO'  : self.plot_interval # 1 spike per plot_interval
         }
  
         self.stim_weights = {
@@ -1721,17 +1761,26 @@ class Cerebellum:
             'IO'  : 1.0
         }
 
+        self.stim_active = {
+            'PN'  : True,
+            'GC'  : False,
+            'PC'  : False,
+            'DCN' : False,
+            'IO'  : False
+        }
+
         self.stims = {}
         self.syns = {}
         self.ncs = {}
 
         # Define connection specifications
         self.connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, delay, sparsity, grouped
-            ('PN', 'GC',  'PN_to_GC',    0, 0.1,  10, 1, 1, 0),  # excitatory
-            ('GC', 'DCN', 'GC_to_DCN',   0, 0.05, 10, 2, 0, 0),  # excitatory
-            ('GC', 'PC',  'GC_to_PC',    0, 0.05, 10, 1, 0, 0),  # excitatory
-            ('IO', 'PC',  'IO_to_PC',    0, 0.0,  10, 1, 0, 1),  # excitatory
-            ('PC', 'DCN', 'PC_to_DCN', -85, 2.0,  20, 1, 0, 1)   # inhibitory
+            ('PN', 'GC',  'PN_to_GC',    0, 0.5,  10, 1, 1, 0),  # excitatory
+            ('GC', 'DCN', 'GC_to_DCN',   0, 0.03,  5, 2, 0, 0),  # excitatory
+            ('GC', 'PC',  'GC_to_PC',    0, 0.3,   3, 1, 0, 0),  # excitatory
+            ('IO', 'PC',  'IO_to_PC',    0, 0.0,   5, 1, 0, 1),  # excitatory
+            ('IO', 'DCN', 'IO_to_DCN',   0, 0.7,   3, 1, 0, 1),  # excitatory
+            ('PC', 'DCN', 'PC_to_DCN', -85, 0.5,   3, 1, 0, 1)   # inhibitory
         ]
         
         self.num_of_plots = min(6, len(self.actuators))
@@ -1743,14 +1792,17 @@ class Cerebellum:
         # Weights
         self.weight_times = [0]
         initial_weight = 0
+        
+        self.weights_over_time = {(gc_id, pc_id): [] 
+                            for gc_id in range(self.total_cell_numbers['GC'])
+                            for pc_id in range(self.total_cell_numbers['PC'])
+                            }
         for spec in self.connection_specs:
             pre_group, post_group, label, e_rev, weight, tau, delay, sparsity, grouped = spec
             if label == 'GC_to_PC':
                 initial_weight = weight
-        self.weights_over_time = {(gc_id, pc_id): [initial_weight] 
-                            for gc_id in range(self.total_cell_numbers['GC'])
-                            for pc_id in range(self.total_cell_numbers['PC'])
-                            }
+        self.min_weight = 0.2 * initial_weight if initial_weight else 0.1 # 20%
+        self.max_weight = 2.0 * initial_weight if initial_weight else 0.5 # 200%
         self.processed_pairs = {}
         self.gc_spikes_last_interval = []
         self.nc_index_map = {}      # label -> {(pre_id, post_id): idx}
@@ -1759,8 +1811,8 @@ class Cerebellum:
         
 
         # --- Parameters ---
-        self.A_plus = 0.01        # fixed LTP increment
-        self.A_minus = 0.05       # max LTD decrement
+        self.A_plus = 0.05        # fixed LTP increment
+        self.A_minus = 0.2       # max LTD decrement
         self.tau_LTD = 70.0       # ms decay constant
 
         
@@ -1812,8 +1864,13 @@ class Cerebellum:
             self.stims[cell_type], self.syns[cell_type], self.ncs[cell_type] = [], [], []
             for population in range(self.cell_types_numbers[cell_type][0]):
                 for i, cell in enumerate(self.cells[cell_type][population]):
-                    offset = 1#i*self.stim_intervals[cell_type]/self.cell_types_numbers[cell_type][1]
+                    if cell_type == 'IO':
+                        offset = 1
+                    else:
+                        offset = i*self.stim_intervals[cell_type]/self.cell_types_numbers[cell_type][1]
                     stim, syn, nc = create_stim(cell, start=offset, interval=self.stim_intervals[cell_type], e=0, tau=0.5, weight=self.stim_weights[cell_type], noise=self.noise)
+                    nc.active(self.stim_active[cell_type])
+
                     self.stims[cell_type].append(stim)
                     self.syns[cell_type].append(syn)
                     self.ncs[cell_type].append(nc)
@@ -1873,6 +1930,12 @@ class Cerebellum:
                         nc = h.NetCon(pre_cell(0.5)._ref_v, syn, sec=pre_cell)
                         nc.weight[0] = weight
                         nc.delay = delay
+                        if label == 'GC_to_PC':
+                            #nc.weight[0] += np.random.normal(0, 0.05) 
+                            #nc.delay = random.uniform (0.5*delay, 1.5*delay) #np.random.normal(delay, 4*delay)
+                            self.weights_over_time[(pre_id, post_id)].append(nc.weight[0])
+                        
+                        
                         self.syns[label].append(syn)
                         self.ncs[label].append(nc)
 
@@ -2039,7 +2102,7 @@ class Cerebellum:
                     self.weight_lines[idx][pc_id].append(line)
 
             self.axs_plot[self.row_weights][idx].set_xlim(0, self.plot_interval)
-            self.axs_plot[self.row_weights][idx].set_ylim(-0.05, 1.05)
+            self.axs_plot[self.row_weights][idx].set_ylim(0, 1.1 * self.max_weight)
             self.axs_plot[self.row_weights][idx].xaxis.set_major_formatter(ms_to_s)
             self.axs_plot[self.row_weights][idx].set_xlabel('Simulation\ntime (s)')
         #self.axs_plot[self.row_weights][-1].legend(loc='upper right')
@@ -2053,13 +2116,13 @@ class Cerebellum:
                 stim = self.ncs[ct][k].pre()
                 stim.interval = interval / val
                 
-    def update_input_stimuli(self, current_time, desired_grasp_type, desired_joints, desired_actuators, flex_sensor_values, touch_sensor_values):
+    def update_input_stimuli(self, desired_grasp_type, desired_joints, desired_actuators, flex_sensor_values=None, touch_sensor_values=None):
         input = []
         input.extend([int(ch) for ch in desired_grasp_type])
         input.extend([int(ch) for ch in desired_joints])
         input.extend([int(ch) for ch in desired_actuators])
-        input.extend(flex_sensor_values)
-        input.extend(touch_sensor_values)
+        if flex_sensor_values: input.extend(flex_sensor_values)
+        if touch_sensor_values: input.extend(touch_sensor_values)
         
         # Update PN stimuli
         self.update_stimulus_activation(ct='PN', input=input)
@@ -2100,72 +2163,85 @@ class Cerebellum:
         self.last_index[cell_type][population][index] = len(all_spikes)
         return new_spikes
 
+    def STDP_kernel(self, delta_t, A_pos=0.01, A_neg=0.05, center=-100.0, sigma=30.0):
+        """
+        Biphasic kernel for GC->PC plasticity:
+        - negative peak at delta_t ~ center (e.g. -100 ms)
+        - positive at large |delta_t|
+        """
+        return A_pos - A_neg * np.exp(-((delta_t - center) ** 2) / (2 * sigma ** 2))
+    
     def update_weights(self, current_time):
         self.weight_times.append(int(current_time))
 
-        # --- Gather new GC spikes (for LTP, only current interval) (for LTD, current + previous interval) ---
-        gc_spikes = {}
-        gc_spikes_for_LTD = {}
-        for pop in range(self.cell_types_numbers['GC'][0]):
-            for gc_id in range(self.cell_types_numbers['GC'][1]):
-                new_spikes = self.get_new_spikes('GC', pop, gc_id)
-                if new_spikes:
-                    gc_spikes[gc_id] = new_spikes
-                gc_spikes_for_LTD[gc_id] = new_spikes + self.gc_spikes_last_interval.get(gc_id, []) if self.gc_spikes_last_interval else self.gc_spikes_last_interval
+        # --- Previous GC spikes for plasticity ---
+        gc_spikes_prev = self.gc_spikes_last_interval if self.gc_spikes_last_interval else {}
 
         # --- Gather IO spikes (current interval only) ---
         io_spikes = {}
-        for pop in range(self.cell_types_numbers['IO'][0]):      # per actuator-direction
+        for pop in range(self.cell_types_numbers['IO'][0]):
             for io_id in range(self.cell_types_numbers['IO'][1]):
                 new_spikes = self.get_new_spikes('IO', pop, io_id)
                 if new_spikes:
                     io_spikes[(pop, io_id)] = new_spikes
 
+        # --- Update GC->PC weights ---
         for gc_id in range(self.total_cell_numbers['GC']):
             for pc_id in range(self.total_cell_numbers['PC']):
                 key = (gc_id, pc_id)
-                    
+
                 # Get last weight
                 if key not in self.weights_over_time:
                     last_weight = self.ncs['GC_to_PC'][self.nc_index_map['GC_to_PC'][key]].weight[0]
                     self.weights_over_time[key] = [last_weight]
                 else:
                     last_weight = self.weights_over_time[key][-1]
-                
+
                 delta_w = 0.0
 
-                # LTP: fixed increment if GC spiked
-                if gc_id in gc_spikes:
-                    for gc_t in gc_spikes.get(gc_id, []):
-                        delta_w += self.A_plus 
-                        if key == (0,0): print(f"{key} LTP gc_t={gc_t} delta_w={delta_w}")
-                        if key == (0,5): print(f"{key} LTP gc_t={gc_t} delta_w={delta_w}")
-                
-                # LTD: timing-dependent for IO spikes
-                for (pop, io_id), io_times in io_spikes.items():
-                    pc_start = pop * self.cell_types_numbers['PC'][1]
-                    pc_end   = (pop + 1) * self.cell_types_numbers['PC'][1]
-                    pc_half  = self.cell_types_numbers['PC'][1] // 2
-                    io_half  = self.cell_types_numbers['IO'][1] // 2
-                    if io_id < io_half:  # first half of IO cells → LTD on positive PCs
-                        pc_range = range(pc_start, pc_start + pc_half)
-                    else:                # second half of IO cells → LTD on negative PCs
-                        pc_range = range(pc_start + pc_half, pc_end)
+                # Loop over all IO neurons
+                for pop in range(self.cell_types_numbers['IO'][0]):
+                    for io_id in range(self.cell_types_numbers['IO'][1]):
+                        io_times = io_spikes.get((pop, io_id), [])  # empty if no spikes
 
-                    if pc_id in pc_range: 
-                        for io_t in io_times:
-                            for gc_t in gc_spikes_for_LTD.get(gc_id, []):
-                                dt = io_t - gc_t
-                                if 0 < dt <= self.tau_LTD:
-                                    delta_w += -self.A_minus * np.exp(-dt / self.tau_LTD)
-                                    if key == (0,0): print(f"{key} LTD io {io_id} pop={pop} pc_start={pc_start} pc_end={pc_end} t={io_t} gc t={gc_t} dt={dt} delta_w={delta_w}")
-                                    if key == (0,5): print(f"{key} LTD io {io_id} pop={pop} pc_start={pc_start} pc_end={pc_end} t={io_t} gc t={gc_t} dt={dt} delta_w={delta_w}")
-                new_weight = max(0, min(1, last_weight + delta_w))
+                        # Assign IO population to correct PC range
+                        pc_start = pop * self.cell_types_numbers['PC'][1]
+                        pc_end   = (pop + 1) * self.cell_types_numbers['PC'][1]
+                        pc_half  = self.cell_types_numbers['PC'][1] // 2
+                        io_half  = self.cell_types_numbers['IO'][1] // 2
+
+                        if io_id < io_half:
+                            pc_range = range(pc_start, pc_start + pc_half)
+                        else:
+                            pc_range = range(pc_start + pc_half, pc_end)
+
+                        if pc_id not in pc_range:
+                            continue  # skip irrelevant IO–PC pairs
+
+                        # Apply kernel for all GC spikes from previous interval
+                        for gc_t in gc_spikes_prev.get(gc_id, []):
+                            if io_times:  # IO fired → compute real dt
+                                for io_t in io_times:
+                                    dt = gc_t - io_t
+                                    delta_w += self.STDP_kernel(dt)
+                            else:  # No IO spikes → baseline LTP
+                                dt = np.inf
+                                delta_w += self.STDP_kernel(dt)
+
+                # Clamp and apply weight
+                new_weight = max(self.min_weight, min(self.max_weight, last_weight + delta_w))
                 idx = self.nc_index_map['GC_to_PC'][key]
                 self.ncs['GC_to_PC'][idx].weight[0] = new_weight
-
                 self.weights_over_time[key].append(round(new_weight, 4))
-        self.gc_spikes_last_interval = gc_spikes.copy()
+
+        # --- Save CURRENT GC spikes for use in NEXT interval ---
+        gc_spikes_now = {}
+        for pop in range(self.cell_types_numbers['GC'][0]):
+            for gc_id in range(self.cell_types_numbers['GC'][1]):
+                new_spikes = self.get_new_spikes('GC', pop, gc_id)
+                if new_spikes:
+                    gc_spikes_now[gc_id] = new_spikes
+        self.gc_spikes_last_interval = gc_spikes_now
 
     def update_plots(self, current_time, goal=None, action=None):
         '''
@@ -2273,6 +2349,8 @@ class Cerebellum:
             if self.axs_plot[self.row_weights][plot_id].get_xlim() != new_xlim:
                 self.axs_plot[self.row_weights][plot_id].set_xlim(*new_xlim)
     
+    def calculate_correction(self):
+        None
 
 #--- Functions ------------------------------------------------------------------------------------------------------------------------------------------------#
 
@@ -2361,7 +2439,7 @@ all_actuators = [
     "Pinky finger flexor"
 ]
 
-MotorLearning(no_of_joints=3, basal_ganglia=True, cerebellum=True, grasp_types=grasp_types, all_joints=all_joints, all_actuators=all_actuators)
+MotorLearning(no_of_joints=3, basal_ganglia_required=True, cerebellum_required=True, grasp_types=grasp_types, all_joints=all_joints, all_actuators=all_actuators)
 
 
 
