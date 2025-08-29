@@ -252,7 +252,7 @@ class MotorLearning:
                     ax_selections = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
                     label_text = '\n'.join(name.split())
                     self.buttons[f'{name}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
-                    self.buttons[f'duration_actuator_{name}'] = ax_selections.text(0.5, 0.03, 'test', ha='center')
+                    self.buttons[f'duration_actuator_{name}'] = ax_selections.text(0.5, 0.03, '', ha='center')
 
                 # Plot a horizontal bar with width=prob
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
@@ -283,7 +283,7 @@ class MotorLearning:
                 self.buttons[f'sensor_flex_{name}'] = ax_selections.text(0.5, 0.9, '', ha='center')
                 if i > 0: self.buttons[f'sensor_touch_{name}'] = ax_selections.text(0.5, 0, '', ha='center')
                 if idx == 0:
-                    self.buttons[f'duration_joint_{name}'] = ax_selections.text(0.5, -0.1, 'test', ha='center')
+                    self.buttons[f'duration_joint_{name}'] = ax_selections.text(0.5, -0.1, '', ha='center')
             
             if idx == 1:
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
@@ -783,7 +783,7 @@ class MotorLearning:
                 
                 start_time = time.time()
 
-                cerebellum_active = True if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) else False
+                cerebellum_active = True # if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) else False
 
                 # Training loops: motor_babbling and learning from demonstration
                 for idx, loop in enumerate(self.loops):
@@ -825,9 +825,9 @@ class MotorLearning:
                     desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
                     desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
                     # desired_timing = 
-                    self.flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
-                    self.touch_sensor_values_on = [0.2, 1.0, 0.4, 0.0, 0.0]
-                    self.touch_sensor_values_off = [0.4, 0.0, 0.0, 0.0, 0.0]
+                    #self.flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
+                    #self.touch_sensor_values_on = [0.2, 1.0, 0.4, 0.0, 0.0]
+                    #self.touch_sensor_values_off = [0.4, 0.0, 0.0, 0.0, 0.0]
                     #self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, flex_sensor_values, touch_sensor_values_on)
                     self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators)
 
@@ -844,8 +844,8 @@ class MotorLearning:
                 
                 # Cerebellum trigger teaching signal (IO)
                 if cerebellum_active:
-                    #self.cerebellum.update_teaching_stimuli(desired_joints=desired_joints, touch_sensor_values_on=self.touch_sensor_values_on, touch_sensor_values_off=self.touch_sensor_values_off)
-                    self.cerebellum.update_teaching_stimuli(desired_joints=desired_joints)
+                    #self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints, touch_sensor_values_on=self.touch_sensor_values_on, touch_sensor_values_off=self.touch_sensor_values_off)
+                    self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints)
 
                 self.update_GUI_performed_action_reward()
 
@@ -858,7 +858,7 @@ class MotorLearning:
                 if cerebellum_active:
                     self.cerebellum.update_weights(current_time=h.t)
                     self.cerebellum.update_plots(current_time=h.t)
-                    self.cerebellum.calculate_correction()
+                    self.cerebellum.calculate_correction(current_time=h.t)
                     print(self.cerebellum.DCN_diff_rates)
                     self.update_joint_duration_mapping(self.cerebellum.DCN_diff_rates)
                     print(self.joint_duration_mapping)
@@ -901,124 +901,7 @@ class MotorLearning:
             #for loop in self.loops:
             #    loop.save_data(path) # Excel file
             #    loop.fig.savefig(f"{path}_{loop.name}.png", dpi=300, bbox_inches='tight') # GUI Screenshot
-                    
-    def old_run_simulation(self):
-        try:
-            while True:
-                if self.paused or all(all(val == 0 for val in loop.cortical_input_dur_rel) for loop in self.loops): 
-                    # Simulation paused
-                    time.sleep(0.1)
-
-                    for loop in self.loops:
-                        loop.fig.canvas.draw_idle()   
-                        loop.fig.canvas.flush_events()
-                    self.cerebellum.fig.canvas.draw_idle()
-                    self.cerebellum.fig.canvas.flush_events()
-                    continue
-                
-                start_time = time.time()
-
-                cerebellum_active = True if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) else False
-
-                for loop in self.loops:
-                    if loop.selected_goal: 
-                        loop.cortical_input_stimuli(current_time=h.t)
-                    
-                # Run simulation
-                time_step = time.time()
-                h.continuerun(h.t + self.plot_interval)
-                if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
-
-                # --- Action selection ---# 
-                for loop in self.loops:
-                    loop.analyze_thalamus_activation_time(current_time=h.t)
-                    loop.select_action()
-
-                # Cerebellum update input
-                if cerebellum_active:
-                    desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
-                    desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
-                    desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
-                    # desired_timing = 
-                    flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
-                    touch_sensor_values_on = [0.2, 1.0, 0.4, 0.0, 0.0]
-                    touch_sensor_values_off = [0.4, 0.0, 0.0, 0.0, 0.0]
-                    #self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, flex_sensor_values, touch_sensor_values_on)
-                    self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators)
-
-                self.update_GUI_goals_actions()
-
-                if self.hw_connected:
-                    self.perform_action()
-                    if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
-                    if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
-                    
-                # --- Reward update ---# 
-                for loop in self.loops:
-                    loop.determine_reward(current_time=h.t, hw_connected=self.hw_connected, performed_action=self.performed_action)
-                
-                # Cerebellum trigger teaching signal (IO)
-                if cerebellum_active:
-                    self.cerebellum.update_teaching_stimuli(desired_joints=desired_joints, touch_sensor_values_on=touch_sensor_values_on, touch_sensor_values_off=touch_sensor_values_off)
-
-                self.update_GUI_performed_action_reward()
-
-                # --- Weight and plot update ---# 
-                for loop in self.loops:
-                    loop.update_weights(current_time=h.t)
-                    loop.update_plots(current_time=h.t)
-                    map = self.calculate_goal_action_mapping(loop.weights_over_time)
-                    print(f"{loop.name} {map}")
-
-                # Cerebellum update weights and plot
-                if cerebellum_active:
-                    self.cerebellum.update_weights(current_time=h.t)
-                    self.cerebellum.update_plots(current_time=h.t)
-                    self.cerebellum.calculate_correction()
-                    print(self.cerebellum.DCN_diff_rates)
-                    self.update_joint_duration_mapping(self.cerebellum.DCN_diff_rates)
-                    print(self.joint_duration_mapping)
-
-                duration = time.time() - start_time
-                print(f"Loop took {duration:.6f} s")
-
-                self.fig.canvas.draw_idle()
-                self.fig.canvas.flush_events()
-                for loop in self.loops:
-                    loop.fig.canvas.draw_idle()   
-                    loop.fig.canvas.flush_events()
-                self.cerebellum.fig.canvas.draw_idle()
-                self.cerebellum.fig.canvas.flush_events()
-            
-        except KeyboardInterrupt:
-            print("\nCtrl-C pressed. Storing data...")
-            plt.close()
-            if self.hw_connected:
-                try:
-                    self.ser_sensor.close()
-                except Exception: None
-                try:
-                    release_command = ''
-                    for actuator in range(1,14):
-                        release_command += f'0-{actuator}-o/'
-                    self.ser_exo.write(release_command.encode())
-                    time.sleep(2)
-                    self.ser_exo.write('S'.encode())
-                    time.sleep(2)
-                    self.ser_exo.write('S'.encode())
-                    time.sleep(2)
-                    self.ser_exo.close()
-                except Exception: None
-
-        finally:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            path = f"Data\{timestamp}"
-
-            #for loop in self.loops:
-            #    loop.save_data(path) # Excel file
-            #    loop.fig.savefig(f"{path}_{loop.name}.png", dpi=300, bbox_inches='tight') # GUI Screenshot
-                        
-
+      
 #--- BasalGangliaLoop ------------------------------------------------------------------------------------------------------------------------------------------------#
 
 class BasalGangliaLoop:
@@ -1960,6 +1843,18 @@ class Cerebellum:
         self.pre_to_post = {}       # label -> {pre_id: [post_id1, post_id2, ...]}
         self.post_to_pre = {}       # label -> {post_id: [pre_id1, pre_id2, ...]}
 
+        # Errors
+        self.error_times = [0]        
+        self.error_over_time = {finger_idx: [0] 
+                            for finger_idx in range(len(self.joints) - 1)
+                            }
+        
+        # Corrections
+        self.correction_times = [0]        
+        self.correction_over_time = {joint_idx: [0] 
+                            for joint_idx in range(len(self.joints))
+                            }
+
         self._init_cells()
         self._init_spike_detectors()
         self._init_stimuli()
@@ -2102,11 +1997,11 @@ class Cerebellum:
         plt.ion()
         self.fig = plt.figure(figsize=(13, 8))
         self.fig.canvas.manager.set_window_title('Cerebellum')
-        self.rows = 3
+        self.rows = 5
         self.gs = gridspec.GridSpec(3, 1, figure=self.fig, height_ratios=[1, 1, 2 * self.rows])
         self.gs_input = self.gs[0].subgridspec(1, 2)
         self.gs_control = self.gs[1].subgridspec(1, len(self.joints) - 1)
-        self.gs_plot = self.gs[2].subgridspec(self.rows, self.num_of_plots)
+        self.gs_plot = self.gs[2].subgridspec(self.rows, self.num_of_plots, height_ratios=[2]*3 + [1]*2)
         self.axs_input = [self.fig.add_subplot(gs) for gs in self.gs_input]
         self.axs_control = [self.fig.add_subplot(gs) for gs in self.gs_control]
         self.axs_plot = []
@@ -2127,12 +2022,14 @@ class Cerebellum:
         for ax in self.axs_control:
             ax.set_axis_off() # deactivate axis
 
-        [self.row_potential, self.row_spike, self.row_weights] = list(range(self.rows))
+        [self.row_potential, self.row_spike, self.row_weights, self.row_errors, self.row_corrections] = list(range(self.rows))
         
         self._init_membrane_potential_plot()
         self._init_spike_plot()
         self._init_control_panel()
         self._init_weight_plot()
+        self._init_error_plot()
+        self._init_correction_plot()
 
         plt.show()
         plt.tight_layout()
@@ -2268,8 +2165,39 @@ class Cerebellum:
             self.axs_plot[self.row_weights][idx].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_weights][idx].set_ylim(0, 1.1 * self.max_weight)
             self.axs_plot[self.row_weights][idx].xaxis.set_major_formatter(ms_to_s)
-            self.axs_plot[self.row_weights][idx].set_xlabel('Simulation\ntime (s)')
+            #self.axs_plot[self.row_weights][idx].set_xlabel('Simulation\ntime (s)')
         self.axs_plot[self.row_weights][-1].legend(loc='upper right')
+
+    def _init_error_plot(self):
+        # Error plot
+        self.axs_plot[self.row_errors][0].set_ylabel('Error')
+        self.error_lines = [[] for _ in range(self.num_of_plots)]
+
+        for plot_idx in range(self.num_of_plots):
+            line, = self.axs_plot[self.row_errors][plot_idx].step([], [], f'C{8}', label='Error', where='post')
+            self.error_lines[plot_idx] = line
+
+            self.axs_plot[self.row_errors][plot_idx].set_xlim(0, self.plot_interval)
+            self.axs_plot[self.row_errors][plot_idx].set_ylim(-1.1, 1.1)
+            self.axs_plot[self.row_errors][plot_idx].xaxis.set_major_formatter(ms_to_s)
+            #self.axs_plot[self.row_errors][plot_idx].set_xlabel('Simulation\ntime (s)')
+        self.axs_plot[self.row_errors][-1].legend(loc='upper right')
+
+    def _init_correction_plot(self):
+        # Correction plot
+        self.axs_plot[self.row_corrections][0].set_ylabel('Correction\n(ms)')
+        self.correction_lines = [[] for _ in range(self.num_of_plots)]
+
+        for plot_idx in range(self.num_of_plots):
+            line, = self.axs_plot[self.row_corrections][plot_idx].step([], [], f'C{9}', label='Correction', where='post')
+            self.correction_lines[plot_idx] = line
+
+            self.axs_plot[self.row_corrections][plot_idx].set_xlim(0, self.plot_interval)
+            self.axs_plot[self.row_corrections][plot_idx].set_ylim(-1.1, 1.1)
+            self.axs_plot[self.row_corrections][plot_idx].xaxis.set_major_formatter(ms_to_s)
+            self.axs_plot[self.row_corrections][plot_idx].set_xlabel('Simulation\ntime (s)')
+            self.axs_plot[self.row_corrections][plot_idx].axhline(y=0, color="black", linestyle='solid', linewidth=1, alpha=0.5)
+        self.axs_plot[self.row_corrections][-1].legend(loc='upper right')
 
     def update_touch_sensor_values(self, finger_idx, val, dir='pos'):
         if self._is_updating_programmatically:
@@ -2302,7 +2230,8 @@ class Cerebellum:
         # Update PN stimuli
         self.update_stimulus_activation(ct='PN', input=input)
     
-    def update_teaching_stimuli(self, desired_joints, touch_sensor_values_on=None, touch_sensor_values_off=None):
+    def update_teaching_stimuli(self, current_time, desired_joints, touch_sensor_values_on=None, touch_sensor_values_off=None):
+        self.error_times.append(current_time)
         if touch_sensor_values_on: self.touch_sensor_values_on = touch_sensor_values_on
         if touch_sensor_values_off: self.touch_sensor_values_off = touch_sensor_values_off
 
@@ -2316,41 +2245,47 @@ class Cerebellum:
             touch_on = self.touch_sensor_values_on[finger_idx]
             touch_off = self.touch_sensor_values_off[finger_idx]
 
+            error_dir = 0
             # Check mismatches
             if desired_joint == 1:
                 if (touch_off > 0 or touch_on == 0):
                     # wanted to grip but failed / released early
-                    teaching_input[2 * j_idx] = 1 # need positive correction
-                    if self.buttons[f'err_pos{finger_idx}'].val != 1:
-                        self._is_updating_programmatically = True
-                        self.buttons[f'err_pos{finger_idx}'].set_val(1)
-                        self._is_updating_programmatically = False
-                        print(f"set err_pos of finger {finger_idx} to 1")
-                else:
-                    if self.buttons[f'err_pos{finger_idx}'].val != 0:
-                        self._is_updating_programmatically = True
-                        self.buttons[f'err_pos{finger_idx}'].set_val(0)
-                        self._is_updating_programmatically = False
-                        print(f"set err_pos of finger {finger_idx} to 0")
-                if touch_on > 0.9:
+                    error_dir = 1 # need positive correction
+                elif touch_on > 0.9:
                     # too much pressure applied
-                    teaching_input[2 * j_idx + 1] = 1 # need negative correction
-                    if self.buttons[f'err_neg{finger_idx}'].val != 1:
-                        self._is_updating_programmatically = True
-                        self.buttons[f'err_neg{finger_idx}'].set_val(1)
-                        self._is_updating_programmatically = False
-                        print(f"set err_neg of finger {finger_idx} to 1")
-                else:
-                    if self.buttons[f'err_neg{finger_idx}'].val != 0:
-                        self._is_updating_programmatically = True
-                        self.buttons[f'err_neg{finger_idx}'].set_val(0)
-                        self._is_updating_programmatically = False
-                        print(f"set err_neg of finger {finger_idx} to 0")
-
+                    error_dir = -1 # need negative correction
             elif desired_joint == 0 and (touch_on or touch_off):
                 # unwanted contact when joint should be inactive
-                teaching_input[2 * j_idx + 1] = 1 # need negative correction
+                error_dir = -1 # need negative correction
             
+            if error_dir == 1: # need positive correction
+                teaching_input[2 * j_idx] = 1 
+                if self.buttons[f'err_pos{finger_idx}'].val != 1:
+                    self._is_updating_programmatically = True
+                    self.buttons[f'err_pos{finger_idx}'].set_val(1)
+                    self._is_updating_programmatically = False
+                    print(f"set err_pos of finger {finger_idx} to 1")
+            elif error_dir == -1: # need negative correction
+                teaching_input[2 * j_idx + 1] = 1 
+                if self.buttons[f'err_neg{finger_idx}'].val != 1:
+                    self._is_updating_programmatically = True
+                    self.buttons[f'err_neg{finger_idx}'].set_val(1)
+                    self._is_updating_programmatically = False
+                    print(f"set err_neg of finger {finger_idx} to 1")
+            else:
+                if self.buttons[f'err_pos{finger_idx}'].val != 0:
+                    self._is_updating_programmatically = True
+                    self.buttons[f'err_pos{finger_idx}'].set_val(0)
+                    self._is_updating_programmatically = False
+                    print(f"set err_pos of finger {finger_idx} to 0")
+                if self.buttons[f'err_neg{finger_idx}'].val != 0:
+                    self._is_updating_programmatically = True
+                    self.buttons[f'err_neg{finger_idx}'].set_val(0)
+                    self._is_updating_programmatically = False
+                    print(f"set err_neg of finger {finger_idx} to 0")
+
+            if j_idx > 0: self.error_over_time[finger_idx].append(error_dir)
+
         # Update IO stimuli
         self.update_stimulus_activation(ct='IO', input=teaching_input)
 
@@ -2362,7 +2297,7 @@ class Cerebellum:
         self.last_index[cell_type][population][index] = len(all_spikes)
         return new_spikes
 
-    def STDP_kernel(self, delta_t, A_pos=0.001, A_neg=0.05, center=-100.0, sigma=30.0):
+    def STDP_kernel(self, delta_t, A_pos=0.005, A_neg=0.05, center=-100.0, sigma=30.0):
         """
         Biphasic kernel for GC->PC plasticity:
         - negative peak at delta_t ~ center (e.g. -100 ms)
@@ -2547,6 +2482,27 @@ class Cerebellum:
             new_xlim = 0, max(self.plot_interval, int(current_time))
             if self.axs_plot[self.row_weights][plot_id].get_xlim() != new_xlim:
                 self.axs_plot[self.row_weights][plot_id].set_xlim(*new_xlim)
+
+            # Error plot
+            self.error_lines[plot_id].set_data(self.error_times, self.error_over_time[plot_id if plot_id == 0 else plot_id - 1])
+            new_xlim = 0, max(self.plot_interval, int(current_time))
+            if self.axs_plot[self.row_errors][plot_id].get_xlim() != new_xlim:
+                self.axs_plot[self.row_errors][plot_id].set_xlim(*new_xlim)
+
+            # Correction plot
+            self.correction_lines[plot_id].set_data(self.correction_times, self.correction_over_time[plot_id])
+            self.correction_lines[plot_id].axes.relim()
+            new_xlim = 0, max(self.plot_interval, int(current_time))
+            if self.axs_plot[self.row_corrections][plot_id].get_xlim() != new_xlim:
+                self.axs_plot[self.row_corrections][plot_id].set_xlim(*new_xlim)
+        # Compute global limits from all axes
+        limits = [(ax.dataLim.ymin, ax.dataLim.ymax) for ax in self.axs_plot[self.row_corrections]]
+        ymins, ymaxs = zip(*limits)
+        global_ymin, global_ymax = min(ymins), max(ymaxs)
+        # Apply to all axes
+        absolute_max = 1.1 * max(abs(global_ymin), abs(global_ymax))
+        for ax in self.axs_plot[self.row_corrections]:
+            ax.set_ylim(-absolute_max, absolute_max)
     
     def analyze_firing_rate(self, cell, window=None, diff=True):
         """Returns a list of firing rates (Hz) for each action's cell population."""
@@ -2581,8 +2537,11 @@ class Cerebellum:
         else:
             return rates
         
-    def calculate_correction(self):
+    def calculate_correction(self, current_time):
+        self.correction_times.append(current_time)
         self.DCN_diff_rates = self.analyze_firing_rate('DCN')
+        for joint_idx, corr in enumerate(self.DCN_diff_rates):
+            self.correction_over_time[joint_idx].append(corr)
 
 #--- Functions ------------------------------------------------------------------------------------------------------------------------------------------------#
 
