@@ -1758,7 +1758,7 @@ class Cerebellum:
         self.grasp_types = grasp_types
         self.joints = joints
         self.actuators = actuators
-        self.touch_sensor_values_on = [0.5] * N_pressure
+        self.touch_sensor_values_on = [0] * N_pressure
         self.touch_sensor_values_off = [0] * N_pressure
 
 
@@ -1772,9 +1772,9 @@ class Cerebellum:
     
         self.cell_types_numbers = {'PN':  [1, self.num_pontine], 
                                    'GC':  [1, self.num_granule], 
+                                   'IO':  [len(self.actuators), self.num_inferior_olive],
                                    'PC':  [len(self.actuators), self.num_purkinje], 
-                                   'DCN': [len(self.actuators), self.num_deep_cerebellar],
-                                   'IO':  [len(self.actuators), self.num_inferior_olive]}
+                                   'DCN': [len(self.actuators), self.num_deep_cerebellar]}
         self.cell_types = list(self.cell_types_numbers.keys())
         self.total_cell_numbers = {cell: val[0] * val[1] for cell, val in self.cell_types_numbers.items()}
 
@@ -1835,7 +1835,7 @@ class Cerebellum:
             pre_group, post_group, label, e_rev, weight, tau, delay, sparsity, grouped = spec
             if label == 'GC_to_PC':
                 initial_weight = weight
-        self.min_weight = 0.2 * initial_weight if initial_weight else 0.1 # 20%
+        self.min_weight = 0.3 * initial_weight if initial_weight else 0.1 # 30%
         self.max_weight = 2.0 * initial_weight if initial_weight else 0.5 # 200%
         self.processed_pairs = {}
         self.gc_spikes_last_interval = []
@@ -2046,7 +2046,7 @@ class Cerebellum:
             if ct == 'PN' or ct == 'GC':
                 for n in range(self.cell_types_numbers[ct][1]):
                     label = ct if n==0 else ''
-                    line, = self.axs_input[0].plot([], [], f'C{j}', label=label, alpha=0.6)
+                    line, = self.axs_input[0].plot([], [], f'C{j+1}', label=label, alpha=0.6)
                     self.mem_lines[ct].append(line)
         self.axs_input[0].set_xlim(0, self.plot_interval)
         self.axs_input[0].set_ylim(-85, 65)
@@ -2059,8 +2059,8 @@ class Cerebellum:
                     for n in range(self.cell_types_numbers[ct][1] // 2):
                         label_pos = ct+'_pos' if n==0 else ''
                         label_neg = ct+'_neg' if n==0 else ''
-                        line_pos, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j}', label=label_pos, alpha=0.6)
-                        line_neg, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j}', linestyle='dashed', label=label_neg, alpha=0.6)
+                        line_pos, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j+1}', label=label_pos, alpha=0.6)
+                        line_neg, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j+1}', linestyle='dashed', label=label_neg, alpha=0.6)
                         self.mem_lines_pos[ct][plot_id].append(line_pos)
                         self.mem_lines_neg[ct][plot_id].append(line_neg)
             print(f"title: {self.joints[plot_id]}")
@@ -2083,7 +2083,7 @@ class Cerebellum:
         for j, ct in enumerate(self.cell_types):
             if ct == 'PN' or ct == 'GC':
                 for _ in range(self.cell_types_numbers[ct][1]):
-                    line, = self.axs_input[1].plot([], [], f'C{j}.', markersize=3)
+                    line, = self.axs_input[1].plot([], [], f'C{j+1}.', markersize=3)
                     self.raster_lines_input[ct].append(line)
                     self.total_cells_input += 1
             
@@ -2111,7 +2111,7 @@ class Cerebellum:
                 if ct != 'PN' and ct != 'GC':
                     self.raster_lines[ct][i] = []
                     for k in range(self.cell_types_numbers[ct][1]):
-                        line, = self.axs_plot[self.row_spike][i].plot([], [], f'C{j}.', markersize=3)
+                        line, = self.axs_plot[self.row_spike][i].plot([], [], f'C{j+1}.', markersize=3)
                         self.raster_lines[ct][i].append(line)
                         self.total_cells += 1
 
@@ -2144,7 +2144,7 @@ class Cerebellum:
             ax_err_neg = self.axs_control[i].inset_axes([0.3,0,0.6,0.45]) #[x0, y0, width, height]
             label_text = ' '.join(name.split()[:-1])
             ax_err_pos.set_title(label_text)
-            self.buttons[f'err_pos{i}'] = Slider(ax_err_pos, 'Grip defizit', 0, 1, valinit=0, valstep=1)
+            self.buttons[f'err_pos{i}'] = Slider(ax_err_pos, 'Grip defizit', 0, 1, valinit=1, valstep=1)
             self.buttons[f'err_pos{i}'].on_changed(lambda val, i=i: self.update_touch_sensor_values(finger_idx=i, val=val, dir='pos'))
             self.buttons[f'err_neg{i}'] = Slider(ax_err_neg, 'Grip overforce', 0, 1, valinit=0, valstep=1)
             self.buttons[f'err_neg{i}'].on_changed(lambda val, i=i: self.update_touch_sensor_values(finger_idx=i, val=val, dir='neg'))
@@ -2159,7 +2159,7 @@ class Cerebellum:
                 style = 'solid' if pc_id < self.cell_types_numbers['PC'][1] // 2 else 'dashed'
                 for gc_id in range (self.total_cell_numbers['GC']):
                     label = '' if pc_id not in [0, self.cell_types_numbers['PC'][1] // 2] or gc_id != 0 else ('PC_pos' if pc_id < self.cell_types_numbers['PC'][1] // 2 else 'PC_neg')
-                    line, = self.axs_plot[self.row_weights][idx].step([], [], f'C{2}', linestyle=style, label=label, where='post', alpha=0.6)
+                    line, = self.axs_plot[self.row_weights][idx].step([], [], f'C{4}', linestyle=style, label=label, where='post', alpha=0.6)
                     self.weight_lines[idx][pc_id].append(line)
 
             self.axs_plot[self.row_weights][idx].set_xlim(0, self.plot_interval)
@@ -2174,7 +2174,7 @@ class Cerebellum:
         self.error_lines = [[] for _ in range(self.num_of_plots)]
 
         for plot_idx in range(self.num_of_plots):
-            line, = self.axs_plot[self.row_errors][plot_idx].step([], [], f'C{8}', label='Error', where='post')
+            line, = self.axs_plot[self.row_errors][plot_idx].step([], [], f'C{3}', label='Error', where='post')
             self.error_lines[plot_idx] = line
 
             self.axs_plot[self.row_errors][plot_idx].set_xlim(0, self.plot_interval)
@@ -2189,7 +2189,7 @@ class Cerebellum:
         self.correction_lines = [[] for _ in range(self.num_of_plots)]
 
         for plot_idx in range(self.num_of_plots):
-            line, = self.axs_plot[self.row_corrections][plot_idx].step([], [], f'C{9}', label='Correction', where='post')
+            line, = self.axs_plot[self.row_corrections][plot_idx].step([], [], f'C{5}', label='Correction', where='post')
             self.correction_lines[plot_idx] = line
 
             self.axs_plot[self.row_corrections][plot_idx].set_xlim(0, self.plot_interval)
