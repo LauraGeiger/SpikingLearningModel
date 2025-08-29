@@ -825,9 +825,9 @@ class MotorLearning:
                     desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
                     desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
                     # desired_timing = 
-                    flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
-                    touch_sensor_values_on = [0.2, 1.0, 0.4, 0.0, 0.0]
-                    touch_sensor_values_off = [0.4, 0.0, 0.0, 0.0, 0.0]
+                    self.flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
+                    self.touch_sensor_values_on = [0.2, 1.0, 0.4, 0.0, 0.0]
+                    self.touch_sensor_values_off = [0.4, 0.0, 0.0, 0.0, 0.0]
                     #self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, flex_sensor_values, touch_sensor_values_on)
                     self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators)
 
@@ -844,7 +844,8 @@ class MotorLearning:
                 
                 # Cerebellum trigger teaching signal (IO)
                 if cerebellum_active:
-                    self.cerebellum.update_teaching_stimuli(desired_joints=desired_joints, touch_sensor_values_on=touch_sensor_values_on, touch_sensor_values_off=touch_sensor_values_off)
+                    #self.cerebellum.update_teaching_stimuli(desired_joints=desired_joints, touch_sensor_values_on=self.touch_sensor_values_on, touch_sensor_values_off=self.touch_sensor_values_off)
+                    self.cerebellum.update_teaching_stimuli(desired_joints=desired_joints)
 
                 self.update_GUI_performed_action_reward()
 
@@ -1874,6 +1875,10 @@ class Cerebellum:
         self.grasp_types = grasp_types
         self.joints = joints
         self.actuators = actuators
+        self.touch_sensor_values_on = [0.5] * N_pressure
+        self.touch_sensor_values_off = [0] * N_pressure
+
+
         self.num_pontine = len(self.grasp_types) + len(self.joints) + len(self.actuators) #+ N_flex + N_pressure
         self.num_granule = 50
         self.num_deep_cerebellar = 2 # 1 for positive correction, 1 for negative correction
@@ -1929,6 +1934,7 @@ class Cerebellum:
         ]
         
         self.num_of_plots = min(6, len(self.actuators))
+        self._is_updating_programmatically = False
 
         self.buttons = {}
         self.rates = {}
@@ -2097,10 +2103,12 @@ class Cerebellum:
         self.fig = plt.figure(figsize=(13, 8))
         self.fig.canvas.manager.set_window_title('Cerebellum')
         self.rows = 3
-        self.gs = gridspec.GridSpec(2, 1, figure=self.fig, height_ratios=[1, 2 * self.rows])
+        self.gs = gridspec.GridSpec(3, 1, figure=self.fig, height_ratios=[1, 1, 2 * self.rows])
         self.gs_input = self.gs[0].subgridspec(1, 2)
-        self.gs_plot = self.gs[1].subgridspec(self.rows, self.num_of_plots)
+        self.gs_control = self.gs[1].subgridspec(1, len(self.joints) - 1)
+        self.gs_plot = self.gs[2].subgridspec(self.rows, self.num_of_plots)
         self.axs_input = [self.fig.add_subplot(gs) for gs in self.gs_input]
+        self.axs_control = [self.fig.add_subplot(gs) for gs in self.gs_control]
         self.axs_plot = []
         for i in range(self.rows):
             row = []
@@ -2115,10 +2123,15 @@ class Cerebellum:
             for j in range(1, self.num_of_plots):  # skip first in row
                 plt.setp(self.axs_plot[i][j].get_yticklabels(), visible=False)
 
+        # Deactivate axis for control axes
+        for ax in self.axs_control:
+            ax.set_axis_off() # deactivate axis
+
         [self.row_potential, self.row_spike, self.row_weights] = list(range(self.rows))
         
         self._init_membrane_potential_plot()
         self._init_spike_plot()
+        self._init_control_panel()
         self._init_weight_plot()
 
         plt.show()
@@ -2153,7 +2166,7 @@ class Cerebellum:
                         line_neg, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j}', linestyle='dashed', label=label_neg, alpha=0.6)
                         self.mem_lines_pos[ct][plot_id].append(line_pos)
                         self.mem_lines_neg[ct][plot_id].append(line_neg)
-
+            print(f"title: {self.joints[plot_id]}")
             self.axs_plot[self.row_potential][plot_id].set_title(f'{self.joints[plot_id]}')
             self.axs_plot[self.row_potential][plot_id].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_potential][plot_id].set_ylim(-85, 65)
@@ -2228,6 +2241,17 @@ class Cerebellum:
             self.axs_plot[self.row_spike][i].xaxis.set_major_formatter(ms_to_s)
         #self.axs_plot[self.row_spike][-1].legend(loc='upper right')
 
+    def _init_control_panel(self):
+        for i, name in enumerate(self.joints[1:]):
+            ax_err_pos = self.axs_control[i].inset_axes([0.3,0.5,0.6,0.45]) #[x0, y0, width, height]
+            ax_err_neg = self.axs_control[i].inset_axes([0.3,0,0.6,0.45]) #[x0, y0, width, height]
+            label_text = ' '.join(name.split()[:-1])
+            ax_err_pos.set_title(label_text)
+            self.buttons[f'err_pos{i}'] = Slider(ax_err_pos, 'Grip defizit', 0, 1, valinit=0, valstep=1)
+            self.buttons[f'err_pos{i}'].on_changed(lambda val, i=i: self.update_touch_sensor_values(finger_idx=i, val=val, dir='pos'))
+            self.buttons[f'err_neg{i}'] = Slider(ax_err_neg, 'Grip overforce', 0, 1, valinit=0, valstep=1)
+            self.buttons[f'err_neg{i}'].on_changed(lambda val, i=i: self.update_touch_sensor_values(finger_idx=i, val=val, dir='neg'))
+
     def _init_weight_plot(self):
         # Weight plot
         self.axs_plot[self.row_weights][0].set_ylabel('GC-PC weights')
@@ -2246,6 +2270,17 @@ class Cerebellum:
             self.axs_plot[self.row_weights][idx].xaxis.set_major_formatter(ms_to_s)
             self.axs_plot[self.row_weights][idx].set_xlabel('Simulation\ntime (s)')
         self.axs_plot[self.row_weights][-1].legend(loc='upper right')
+
+    def update_touch_sensor_values(self, finger_idx, val, dir='pos'):
+        if self._is_updating_programmatically:
+            return
+        
+        if dir == 'pos':
+            self.touch_sensor_values_on[finger_idx] = 0 if val else 0.5
+        elif dir == 'neg':
+            self.touch_sensor_values_on[finger_idx] = 1 if val else 0.5
+        print(f"self.touch_sensor_values_on={self.touch_sensor_values_on}")
+        #self.touch_sensor_values_off
 
     def update_stimulus_activation(self, ct, input=None):
         for k, _ in enumerate(self.ncs[ct]):
@@ -2267,7 +2302,10 @@ class Cerebellum:
         # Update PN stimuli
         self.update_stimulus_activation(ct='PN', input=input)
     
-    def update_teaching_stimuli(self, desired_joints, touch_sensor_values_on, touch_sensor_values_off):
+    def update_teaching_stimuli(self, desired_joints, touch_sensor_values_on=None, touch_sensor_values_off=None):
+        if touch_sensor_values_on: self.touch_sensor_values_on = touch_sensor_values_on
+        if touch_sensor_values_off: self.touch_sensor_values_off = touch_sensor_values_off
+
         joint_to_finger_mapping = [0] + [i for i in range(len(self.joints) - 1)] # 2 joints for thumb
         teaching_input = [0] * self.total_cell_numbers['IO']
         
@@ -2275,17 +2313,39 @@ class Cerebellum:
             finger_idx = joint_to_finger_mapping[j_idx]
             desired_joint = int(desired_joint)
 
-            touch_on = touch_sensor_values_on[finger_idx]
-            touch_off = touch_sensor_values_off[finger_idx]
+            touch_on = self.touch_sensor_values_on[finger_idx]
+            touch_off = self.touch_sensor_values_off[finger_idx]
 
             # Check mismatches
             if desired_joint == 1:
                 if (touch_off > 0 or touch_on == 0):
                     # wanted to grip but failed / released early
                     teaching_input[2 * j_idx] = 1 # need positive correction
-                elif touch_on > 0.9:
+                    if self.buttons[f'err_pos{finger_idx}'].val != 1:
+                        self._is_updating_programmatically = True
+                        self.buttons[f'err_pos{finger_idx}'].set_val(1)
+                        self._is_updating_programmatically = False
+                        print(f"set err_pos of finger {finger_idx} to 1")
+                else:
+                    if self.buttons[f'err_pos{finger_idx}'].val != 0:
+                        self._is_updating_programmatically = True
+                        self.buttons[f'err_pos{finger_idx}'].set_val(0)
+                        self._is_updating_programmatically = False
+                        print(f"set err_pos of finger {finger_idx} to 0")
+                if touch_on > 0.9:
                     # too much pressure applied
                     teaching_input[2 * j_idx + 1] = 1 # need negative correction
+                    if self.buttons[f'err_neg{finger_idx}'].val != 1:
+                        self._is_updating_programmatically = True
+                        self.buttons[f'err_neg{finger_idx}'].set_val(1)
+                        self._is_updating_programmatically = False
+                        print(f"set err_neg of finger {finger_idx} to 1")
+                else:
+                    if self.buttons[f'err_neg{finger_idx}'].val != 0:
+                        self._is_updating_programmatically = True
+                        self.buttons[f'err_neg{finger_idx}'].set_val(0)
+                        self._is_updating_programmatically = False
+                        print(f"set err_neg of finger {finger_idx} to 0")
 
             elif desired_joint == 0 and (touch_on or touch_off):
                 # unwanted contact when joint should be inactive
