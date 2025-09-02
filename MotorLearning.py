@@ -140,14 +140,14 @@ class MotorLearning:
         self.performed_action = None
         self.num_flex_sensors = 6
         self.num_touch_sensors = 5
-        #self.actuators_flexors = [4, 1, 6, 8, 10, 12]
-        #self.actuators_flexors = self.actuators_flexors[:self.no_of_joints]
-        #random.shuffle(self.actuators_flexors)
-        #self.actuators_extensors = [2, 7, 9, 11, 13]
+        self.touch_sensor_values_delta_up = [0] * self.num_touch_sensors
+        self.touch_sensor_values_delta_down = [0] * self.num_touch_sensors
         self.duration_actuators = 300 # ms
         self.duration_flexors = 2000 # ms
         self.delay = 500 # ms
+        self.hold_time = 3000 # ms
         self.joint_duration_mapping = {joint: self.duration_flexors for joint in self.joints}
+        #self.joint_duration_mapping = {grasp_type: {joint: self.duration_flexors for joint in self.joints} for grasp_type in self.grasp_types}
 
         # Valve - Actuators
         #  1 - Thumb flexor
@@ -252,14 +252,14 @@ class MotorLearning:
                     ax_selections = self.axs_selections[idx][i].inset_axes([0,0,1,1]) #[x0, y0, width, height]
                     label_text = '\n'.join(name.split())
                     self.buttons[f'{name}'] = TextBox(ax_selections, label='', label_pad=0.05, initial=f'{label_text}', color='None', textalignment='center')
-                    self.buttons[f'duration_actuator_{name}'] = ax_selections.text(0.5, 0.03, '', ha='center')
+                    self.buttons[f'duration_actuator_{name}'] = ax_selections.text(0.5, -0.1, 'dur_act', ha='center')
 
                 # Plot a horizontal bar with width=prob
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
                     x=0.5, width=0.8, height=0, color='tab:cyan')[0]  # Get BarContainer object
                 ax_probabilities = self.axs_probabilities[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
                 ax_probabilities.set_axis_off()
-                self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='', ha='center', va='center', transform=ax_probabilities.transAxes)
+                self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='prob_bar', ha='center', va='center', transform=ax_probabilities.transAxes)
 
             # Plot input group name
             self.axs_names[idx+1] = self.fig.add_subplot(self.gs_names[row-1])
@@ -279,18 +279,17 @@ class MotorLearning:
                 label_text = '\n'.join(name.split())
                 self.buttons[f'{name}'] = Button(ax_selections, label=f'{label_text}', color='None', hovercolor='lightgray')
                 self.buttons[f'{name}'].on_clicked(lambda event, loop=loop, i=i: self.update_goals(loop, i))
-                self.buttons[f'probability_{name}'] = ax_selections.text(0.5, 0.03, '', ha='center')
-                self.buttons[f'sensor_flex_{name}'] = ax_selections.text(0.5, 0.9, '', ha='center')
-                if i > 0: self.buttons[f'sensor_touch_{name}'] = ax_selections.text(0.5, 0, '', ha='center')
+                self.buttons[f'probability_{name}'] = ax_selections.text(0.5, 0.03, 'Prob', ha='center')
                 if idx == 0:
-                    self.buttons[f'duration_joint_{name}'] = ax_selections.text(0.5, -0.1, '', ha='center')
-            
+                    self.buttons[f'sensor_flex_{name}'] = ax_selections.text(0.5, 0.9, 'sensor_flex', ha='center')
+                    if i > 0: self.buttons[f'sensor_touch_{name}'] = ax_selections.text(0.5, -0.1, 'sensor_touch', ha='center')
+                
             if idx == 1:
                 self.buttons[f'probability_bar_{idx}'] = self.axs_probabilities[idx].bar(
                     x=0.5, width=0.8, height=0, color='tab:cyan')[0]  # Get BarContainer object
                 ax_probabilities = self.axs_probabilities[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
                 ax_probabilities.set_axis_off()
-                self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='', ha='center', va='center', transform=ax_probabilities.transAxes)
+                self.buttons[f'probability_{idx}'] = ax_probabilities.text(0.5, 0, s='prob_idx1', ha='center', va='center', transform=ax_probabilities.transAxes)
             
             # Initialize reward lines
             line, = self.ax_reward.step([], [], label=loop.name, where='post')
@@ -396,7 +395,7 @@ class MotorLearning:
         self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
         self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
         start_time = time.time()
-        while time.time() - start_time < duration:
+        while time.time() - start_time < duration / 1000:
             if self.ser_sensor.in_waiting > 0:
                 line = self.ser_sensor.readline().decode('utf-8', errors='ignore').strip()
                 try:
@@ -411,76 +410,45 @@ class MotorLearning:
         if len(self.recorded_sensor_data_flex[0]) < self.num_flex_sensors:
             print("Not enough data from flex sensors")
         else:
-            prev_filtered = [self.recorded_sensor_data_flex[0][i] for i in range(self.num_flex_sensors)]
-            start_filtered = prev_filtered.copy()
+            start = [self.recorded_sensor_data_flex[0][i] for i in range(self.num_flex_sensors)]
+            prev_filtered = start.copy()
             max_filtered = prev_filtered.copy()
-            min_filtered = prev_filtered.copy()
 
-            self.flexion_detected = [False] * self.num_flex_sensors
-            self.extension_detected = [False] * self.num_flex_sensors
+            flexion_detected = [False] * self.num_flex_sensors
 
             for sample in self.recorded_sensor_data_flex[1:]:
                 for i in range(self.num_flex_sensors):
                     # Apply low-pass filter
                     filtered = alpha * prev_filtered[i] + (1 - alpha) * sample[i]
 
-                    # Track max and min
+                    # Track max
                     max_filtered[i] = max(max_filtered[i], filtered)
-                    min_filtered[i] = min(min_filtered[i], filtered)
-
-                    # Detect flexion and extension
-                    if (max_filtered[i] - start_filtered[i]) > flexion_threshold:
-                        self.flexion_detected[i] = True
-                    if (start_filtered[i] - min_filtered[i]) > extension_threshold:
-                        self.extension_detected[i] = True
 
                     prev_filtered[i] = filtered
 
-            if len(self.loops[0].actions_names) < 3:
-                self.flexion_detected = self.flexion_detected[1:1+len(self.loops[0].actions_names)]
-                max_filtered = max_filtered[1:1+len(self.loops[0].actions_names)]
-                start_filtered = start_filtered[1:1+len(self.loops[0].actions_names)]
-                min_filtered = min_filtered[1:1+len(self.loops[0].actions_names)]
-
             for i, name in enumerate(self.loops[0].goals_names):
-                flex = self.flexion_detected[i]
-                extend = self.extension_detected[i]
-                delta_up = max_filtered[i] - start_filtered[i]
-                delta_down = start_filtered[i] - min_filtered[i]
-                text = f"{delta_up:.2f}\n{'Flexion' if flex else ''}"
+                delta_up = max_filtered[i] - start[i]
+                if delta_up > flexion_threshold:
+                    flexion_detected[i] = True
+                text = f"{delta_up:.2f} {'Flexion' if flexion_detected[i] else ''}"
                 self.buttons[f'sensor_flex_{name}'].set_text(text)
-            '''
-            # Print results
-            print("\nFlexion and Extension Detection Results:")
-            for i in range(len(self.loops[0].actions_names)):
-                baseline = start_filtered[i]
-                flex = self.flexion_detected[i]
-                extend = self.extension_detected[i]
-                delta_up = max_filtered[i] - start_filtered[i]
-                delta_down = start_filtered[i] - min_filtered[i]
-                print(
-                    f"Sensor {i}: "
-                    f"Baseline = {baseline} "
-                    f"{'👉 Flexion' if flex else '   '} "
-                    f"{'👈 Extension' if extend else ''} "
-                    f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
-                )
-            '''
-            self.performed_action = ''.join(['1' if value else '0' for value in self.flexion_detected])
+            
+            self.performed_action = ''.join(['1' if value else '0' for value in flexion_detected])
             self.performed_action = self.performed_action[:len(self.loops[0].actions_names)]
             print(f"performed action = {self.performed_action}")
 
-    def analyze_sensor_data_touch(self, alpha=0.8, touch_threshold=20, window=30):
+    def analyze_sensor_data_touch(self, alpha=0.8, touch_threshold=20):
         if len(self.recorded_sensor_data_touch[0]) < self.num_touch_sensors:
             print("Not enough data from touch sensors")
         else:
-            prev_filtered = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
-            start_filtered = prev_filtered.copy()
+            start = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
+            end = [self.recorded_sensor_data_touch[-1][i] for i in range(self.num_touch_sensors)]
+            prev_filtered = start.copy()
             max_filtered = prev_filtered.copy()
             min_filtered = prev_filtered.copy()
 
             self.touch_detected = [False] * self.num_touch_sensors
-            #self.release_detected = [False] * self.num_touch_sensors
+            self.release_detected = [False] * self.num_touch_sensors
 
             for sample in self.recorded_sensor_data_touch[1:]:
                 for i in range(self.num_touch_sensors):
@@ -491,37 +459,13 @@ class MotorLearning:
                     max_filtered[i] = max(max_filtered[i], filtered)
                     min_filtered[i] = min(min_filtered[i], filtered)
 
-                    # Detect touch and release
-                    if (max_filtered[i] - start_filtered[i]) > touch_threshold:
-                        self.touch_detected[i] = True
-                    if (start_filtered[i] - min_filtered[i]) > touch_threshold:
-                        self.release_detected[i] = True
-
                     prev_filtered[i] = filtered
 
             for i, name in enumerate(self.loops[0].goals_names[1:]):
-                touch = self.touch_detected[i]
-                #release = self.release_detected[i]
-                delta_up = max_filtered[i] - start_filtered[i]
-                delta_down = start_filtered[i] - min_filtered[i]
-                text = f"{delta_up:.2f} {'Touch' if touch else ''}"
+                self.touch_sensor_values_delta_up[i] = max_filtered[i] - start[i]
+                self.touch_sensor_values_delta_down[i] = max_filtered[i] - end[i] 
+                text = f"{self.touch_sensor_values_delta_up[i]:.2f} {'Touch' if self.touch_sensor_values_delta_up[i] > touch_threshold else ''}"
                 self.buttons[f'sensor_touch_{name}'].set_text(text)
-
-            # Print results
-            '''
-            print("\nTouch Detection Results:")
-            for i in range(self.num_touch_sensors):
-                baseline = start_filtered[i]
-                touch = self.touch_detected[i]
-                delta_up = max_filtered[i] - start_filtered[i]
-                delta_down = start_filtered[i] - min_filtered[i]
-                print(
-                    f"Sensor {i}: "
-                    f"Baseline = {baseline} "
-                    f"{'👉 Touch' if touch else '   '} "
-                    f"(Δ up = {delta_up:.2f}, Δ down = {delta_down:.2f})"
-                )
-            '''
 
     def update_GUI_goals_actions(self, frame=None):       
         for idx, loop in enumerate(self.loops):
@@ -547,11 +491,6 @@ class MotorLearning:
                     self.buttons[f'sensor_flex_{name}'].set_text('')
                     if i > 0:
                         self.buttons[f'sensor_touch_{name}'].set_text('')
-                    if name not in loop.learned_goal_action_map:
-                        duration = self.joint_duration_mapping.get(name, 0) if name else None
-                        self.buttons[f'duration_joint_{name}'].set_text(f'{duration} ms' if duration else '')
-                    else:
-                        self.buttons[f'duration_joint_{name}'].set_text('')
 
                 if loop.selected_goal:
                     char = loop.selected_goal[i]
@@ -664,67 +603,73 @@ class MotorLearning:
                 if self.buttons.get(f'probability_{name}'):
                     self.buttons[f'probability_{name}'].set_text(f'{avg_prob:.1%}')
     
-    def generate_action_command(self, action=None):
-        action_command = ''
-        factor = 2
-        duration_flexors = 0
-
-        if action:
-            duration_flexors = factor
-        else:
-            if self.loops[0].selected_action:
-                action = self.loops[0].selected_action[0]  
-                
-                duration_flexors = factor * self.loops[0].selected_action[1]   
+    def generate_action_command(self):
+        action = self.loops[0].selected_action[0]  
+        selected_actions_names = [name for bit, name in zip(action, self.actuators_flexors) if bit == "1"]
+        for name in selected_actions_names:
+            joint = next((j for j, a in self.loops[0].learned_goal_action_map.items() if name in a), None)
+            duration = self.joint_duration_mapping.get(joint, 0) if joint else None
+            self.buttons[f'duration_actuator_{name}'].set_text(f'{duration} ms' if duration else '')
         
-        if duration_flexors:
-            action_command_parts = []
+        action_command_parts = []
 
-            # Control all actuators
-            for actuator in self.actuators_extensors + self.actuators_flexors:
-                action_command_parts.append(f"0-{actuator}-i")
-            for actuator in self.actuators_extensors + self.actuators_flexors:
-                action_command_parts.append(f"{self.duration_actuators}-{actuator}-h")
+        # Control all actuators
+        for actuator in self.actuators_extensors + self.actuators_flexors:
+            actuator_number = actuator.split()[-1]
+            action_command_parts.append(f"0-{actuator_number}-i")
+        for actuator in self.actuators_extensors + self.actuators_flexors:
+            actuator_number = actuator.split()[-1]
+            action_command_parts.append(f"{self.duration_actuators}-{actuator_number}-h")
 
-            # Control individual flexors based on selected action
-            for i, bit in enumerate(action):
-                if bit == '1':
-                    flexor = self.actuators_flexors[i]
-                    # Inlet position
-                    action_command_parts.append(f"{(self.duration_actuators+self.delay)}-{flexor}-i")
+        # Control individual flexors based on selected action
+        for i, bit in enumerate(action):
+            if bit == '1':
+                flexor = self.actuators_flexors[i]
+                flexor_number = flexor.split()[-1]
+                # Inlet position
+                action_command_parts.append(f"{(self.delay + self.duration_actuators)}-{flexor_number}-i")
 
-            for i, bit in enumerate(action):
-                if bit == '1':
-                    flexor = self.actuators_flexors[i]
-                    # Hold position
-                    action_command_parts.append(f"{(self.duration_actuators+self.delay+duration_flexors)}-{flexor}-h")
+        max_flexion_duration = 0
+        for i, bit in enumerate(action):
+            if bit == '1':
+                flexor = self.actuators_flexors[i]
+                joint = next((j for j, a in self.loops[0].learned_goal_action_map.items() if flexor in a), None)
+                duration = self.joint_duration_mapping.get(joint, 0) if joint else None
 
-            action_command = '/'.join(action_command_parts) + '/'
+                if duration and duration > max_flexion_duration:
+                    max_flexion_duration = duration
+                flexor_number = flexor.split()[-1]
+                # Hold position
+                action_command_parts.append(f"{(self.delay + self.duration_actuators + duration)}-{flexor_number}-h")
+
+        action_command = '/'.join(action_command_parts) + '/'
+
+        max_duration = self.delay + self.duration_actuators + max_flexion_duration
         
-        return action_command, duration_flexors
+        return action_command, max_duration
 
-    def perform_action(self, action=None):
-        duration = 0
-        if action: # used for motor babbling
-            action_command, duration = self.generate_action_command(action)
-            print(f"Perform action: {action} for {duration}s")
+    def perform_action(self):
+        max_duration = 0
+        
+        if self.loops[0].selected_action:
+            action_command, max_duration = self.generate_action_command()
+            print(f"Perform action: {self.loops[0].selected_action[0]} max_duration {max_duration}")
             
-        else:
-            if self.loops[0].selected_action:
-                action_command, duration = self.generate_action_command()
-                print(f"Perform action: {self.loops[0].selected_action[0]} for {duration}s")
-            
-        if duration: # perform action
+        if max_duration: # perform action
             start_stop_command = 'S'
             self.ser_sensor.flushInput() # delete values in serial input buffer
     
             self.ser_exo.write(action_command.encode())
-            time.sleep(2)
+            print(f"Write command {action_command}")
+            time.sleep(3)
 
             self.ser_exo.write(start_stop_command.encode())
-            self.read_sensor_data(duration=duration+2)
+            print("Start command sent")
+            print("Read sensor data ...")
+            self.read_sensor_data(duration=max_duration+self.hold_time)
             self.ser_exo.write(start_stop_command.encode())
-            time.sleep(2)
+            print("Stop command sent")
+            time.sleep(3)
     
     def update_joint_duration_mapping(self, time_correction):
         for joint_id, corr in enumerate(time_correction):
@@ -749,7 +694,6 @@ class MotorLearning:
                 sums_counts[key][0] += weight[-1]
                 sums_counts[key][1] += 1
 
-        #print(sums_counts)
         # now figure out max averages in one go
         for (pre_pop, post_pop), (s, c) in sums_counts.items():
             avg_w = s / c
@@ -783,7 +727,7 @@ class MotorLearning:
                 
                 start_time = time.time()
 
-                cerebellum_active = True # if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) else False
+                cerebellum_active = True #if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) else False
 
                 # Training loops: motor_babbling and learning from demonstration
                 for idx, loop in enumerate(self.loops):
@@ -810,26 +754,28 @@ class MotorLearning:
                     if loop.selected_goal: loop.cortical_input_stimuli(current_time=h.t)
                     
                 # Run simulation
-                time_step = time.time()
+                #time_step = time.time()
                 h.continuerun(h.t + self.plot_interval)
-                if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
+                #if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
 
                 # --- Action selection ---# 
+                #time_step = time.time()
                 for loop in self.loops:
                     loop.analyze_thalamus_activation_time(current_time=h.t)
                     loop.select_action()
+                #if time.time() - time_step > 1: 
+                #print(f"{(time.time() - time_step):.6f} s action selection")
 
                 # Cerebellum update input
+                #time_step = time.time()
                 if cerebellum_active:
                     desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
                     desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
                     desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
-                    # desired_timing = 
-                    #self.flex_sensor_values = [0.7, 0.8, 0.6, 0.3, 0.0, 0.0]
-                    #self.touch_sensor_values_on = [0.2, 1.0, 0.4, 0.0, 0.0]
-                    #self.touch_sensor_values_off = [0.4, 0.0, 0.0, 0.0, 0.0]
                     #self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, flex_sensor_values, touch_sensor_values_on)
                     self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators)
+                #if time.time() - time_step > 1: 
+                #print(f"{(time.time() - time_step):.6f} s cerebellum update input")
 
                 self.update_GUI_goals_actions()
 
@@ -837,31 +783,49 @@ class MotorLearning:
                     self.perform_action()
                     if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
                     if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
-                    
+                print(f"self.touch_sensor_values_delta_up {self.touch_sensor_values_delta_up} \nself.touch_sensor_values_delta_down {self.touch_sensor_values_delta_down}") 
                 # --- Reward update ---# 
+                #time_step = time.time()
                 for loop in self.loops:
                     loop.determine_reward(current_time=h.t, hw_connected=self.hw_connected, performed_action=self.performed_action)
-                
+                #if time.time() - time_step > 1: 
+                #print(f"{(time.time() - time_step):.6f} s determine reward")
+
                 # Cerebellum trigger teaching signal (IO)
+                #time_step = time.time()
                 if cerebellum_active:
-                    #self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints, touch_sensor_values_on=self.touch_sensor_values_on, touch_sensor_values_off=self.touch_sensor_values_off)
-                    self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints)
+                    self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints, hw_connected=self.hw_connected, touch_sensor_values_on=self.touch_sensor_values_delta_up, touch_sensor_values_off=self.touch_sensor_values_delta_down)
+                    #self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints)
+                #if time.time() - time_step > 1: 
+                #print(f"{(time.time() - time_step):.6f} s cerebellum teaching signal")
 
                 self.update_GUI_performed_action_reward()
 
                 # --- Weight and plot update ---# 
+                #time_step = time.time()
                 for loop in self.loops:
                     loop.update_weights(current_time=h.t)
                     loop.update_plots(current_time=h.t)
+                #if time.time() - time_step > 1: 
+                #print(f"{(time.time() - time_step):.6f} s update weights and plots")
 
                 # Cerebellum update weights and plot
+                #time_step = time.time()
                 if cerebellum_active:
+                    #time_step = time.time()
                     self.cerebellum.update_weights(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s cerebellum update weights")
+                    #time_step = time.time()
                     self.cerebellum.update_plots(current_time=h.t)
+                    #print(f"{(time.time() - time_step):.6f} s cerebellum update plots")
+                    #time_step = time.time()
                     self.cerebellum.calculate_correction(current_time=h.t)
-                    print(self.cerebellum.DCN_diff_rates)
+                    #print(f"{(time.time() - time_step):.6f} s cerebellum calculate correction")
+                    #time_step = time.time()
                     self.update_joint_duration_mapping(self.cerebellum.DCN_diff_rates)
-                    print(self.joint_duration_mapping)
+                    #print(f"{(time.time() - time_step):.6f} s cerebellum update joint duration mapping")
+                #if time.time() - time_step > 1: 
+                #print(f"{(time.time() - time_step):.6f} s cerebellum update weights and plots")
 
                 duration = time.time() - start_time
                 print(f"Loop took {duration:.6f} s")
@@ -924,7 +888,7 @@ class BasalGangliaLoop:
         self.plot_interval = plot_interval
         self.child_loop = child_loop
         self.training = False
-        self.learned_goal_action_map = {}
+        self.learned_goal_action_map = {goal_name: [self.actions_names[goal_id]] for goal_id, goal_name in enumerate(self.goals_names)}
 
         self.cell_types_numbers = {'Cor':  [len(self.goals),   1], 
                                    'SNc':  [len(self.actions), 1], 
@@ -1768,6 +1732,8 @@ class Cerebellum:
         self.num_purkinje = self.num_deep_cerebellar * 4
         self.num_inferior_olive = self.num_deep_cerebellar
 
+        
+
         self.DCN_diff_rates = [0] * len(self.joints)
     
         self.cell_types_numbers = {'PN':  [1, self.num_pontine], 
@@ -1777,6 +1743,12 @@ class Cerebellum:
                                    'DCN': [len(self.actuators), self.num_deep_cerebellar]}
         self.cell_types = list(self.cell_types_numbers.keys())
         self.total_cell_numbers = {cell: val[0] * val[1] for cell, val in self.cell_types_numbers.items()}
+
+        self.cell_types_colors = {'PN':  ['C1'], 
+                                  'GC':  ['C2'], 
+                                  'IO':  ['C3'],
+                                  'PC':  ['C4', 'C5'], 
+                                  'DCN': ['C6']}
 
         self.stim_intervals = {
             'PN'  : 1000 / 30, # 30 Hz
@@ -2046,7 +2018,7 @@ class Cerebellum:
             if ct == 'PN' or ct == 'GC':
                 for n in range(self.cell_types_numbers[ct][1]):
                     label = ct if n==0 else ''
-                    line, = self.axs_input[0].plot([], [], f'C{j+1}', label=label, alpha=0.6)
+                    line, = self.axs_input[0].plot([], [], self.cell_types_colors[ct][0], label=label, alpha=0.6)
                     self.mem_lines[ct].append(line)
         self.axs_input[0].set_xlim(0, self.plot_interval)
         self.axs_input[0].set_ylim(-85, 65)
@@ -2059,11 +2031,10 @@ class Cerebellum:
                     for n in range(self.cell_types_numbers[ct][1] // 2):
                         label_pos = ct+'_pos' if n==0 else ''
                         label_neg = ct+'_neg' if n==0 else ''
-                        line_pos, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j+1}', label=label_pos, alpha=0.6)
-                        line_neg, = self.axs_plot[self.row_potential][plot_id].plot([], [], f'C{j+1}', linestyle='dashed', label=label_neg, alpha=0.6)
+                        line_pos, = self.axs_plot[self.row_potential][plot_id].plot([], [], self.cell_types_colors[ct][0], label=label_pos, alpha=0.6)
+                        line_neg, = self.axs_plot[self.row_potential][plot_id].plot([], [], self.cell_types_colors[ct][-1], linestyle='dashed', label=label_neg, alpha=0.6)
                         self.mem_lines_pos[ct][plot_id].append(line_pos)
                         self.mem_lines_neg[ct][plot_id].append(line_neg)
-            print(f"title: {self.joints[plot_id]}")
             self.axs_plot[self.row_potential][plot_id].set_title(f'{self.joints[plot_id]}')
             self.axs_plot[self.row_potential][plot_id].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_potential][plot_id].set_ylim(-85, 65)
@@ -2083,7 +2054,7 @@ class Cerebellum:
         for j, ct in enumerate(self.cell_types):
             if ct == 'PN' or ct == 'GC':
                 for _ in range(self.cell_types_numbers[ct][1]):
-                    line, = self.axs_input[1].plot([], [], f'C{j+1}.', markersize=3)
+                    line, = self.axs_input[1].plot([], [], self.cell_types_colors[ct][0]+'.', markersize=3)
                     self.raster_lines_input[ct].append(line)
                     self.total_cells_input += 1
             
@@ -2111,7 +2082,8 @@ class Cerebellum:
                 if ct != 'PN' and ct != 'GC':
                     self.raster_lines[ct][i] = []
                     for k in range(self.cell_types_numbers[ct][1]):
-                        line, = self.axs_plot[self.row_spike][i].plot([], [], f'C{j+1}.', markersize=3)
+                        color = self.cell_types_colors[ct][0] if k < self.cell_types_numbers[ct][1] // 2 else self.cell_types_colors[ct][-1]
+                        line, = self.axs_plot[self.row_spike][i].plot([], [], color+'.', markersize=3)
                         self.raster_lines[ct][i].append(line)
                         self.total_cells += 1
 
@@ -2144,7 +2116,7 @@ class Cerebellum:
             ax_err_neg = self.axs_control[i].inset_axes([0.3,0,0.6,0.45]) #[x0, y0, width, height]
             label_text = ' '.join(name.split()[:-1])
             ax_err_pos.set_title(label_text)
-            self.buttons[f'err_pos{i}'] = Slider(ax_err_pos, 'Grip defizit', 0, 1, valinit=1, valstep=1)
+            self.buttons[f'err_pos{i}'] = Slider(ax_err_pos, 'Grip defizit', 0, 1, valinit=0, valstep=1)
             self.buttons[f'err_pos{i}'].on_changed(lambda val, i=i: self.update_touch_sensor_values(finger_idx=i, val=val, dir='pos'))
             self.buttons[f'err_neg{i}'] = Slider(ax_err_neg, 'Grip overforce', 0, 1, valinit=0, valstep=1)
             self.buttons[f'err_neg{i}'].on_changed(lambda val, i=i: self.update_touch_sensor_values(finger_idx=i, val=val, dir='neg'))
@@ -2157,9 +2129,10 @@ class Cerebellum:
         for idx in range(self.num_of_plots):
             for pc_id in range(self.cell_types_numbers['PC'][1]):
                 style = 'solid' if pc_id < self.cell_types_numbers['PC'][1] // 2 else 'dashed'
+                color = self.cell_types_colors['PC'][0] if pc_id < self.cell_types_numbers['PC'][1] // 2 else self.cell_types_colors['PC'][-1]
                 for gc_id in range (self.total_cell_numbers['GC']):
                     label = '' if pc_id not in [0, self.cell_types_numbers['PC'][1] // 2] or gc_id != 0 else ('PC_pos' if pc_id < self.cell_types_numbers['PC'][1] // 2 else 'PC_neg')
-                    line, = self.axs_plot[self.row_weights][idx].step([], [], f'C{4}', linestyle=style, label=label, where='post', alpha=0.6)
+                    line, = self.axs_plot[self.row_weights][idx].step([], [], color, linestyle=style, label=label, where='post', alpha=0.6)
                     self.weight_lines[idx][pc_id].append(line)
 
             self.axs_plot[self.row_weights][idx].set_xlim(0, self.plot_interval)
@@ -2174,7 +2147,7 @@ class Cerebellum:
         self.error_lines = [[] for _ in range(self.num_of_plots)]
 
         for plot_idx in range(self.num_of_plots):
-            line, = self.axs_plot[self.row_errors][plot_idx].step([], [], f'C{3}', label='Error', where='post')
+            line, = self.axs_plot[self.row_errors][plot_idx].step([], [], self.cell_types_colors['IO'][0], label='Error', where='post')
             self.error_lines[plot_idx] = line
 
             self.axs_plot[self.row_errors][plot_idx].set_xlim(0, self.plot_interval)
@@ -2189,7 +2162,7 @@ class Cerebellum:
         self.correction_lines = [[] for _ in range(self.num_of_plots)]
 
         for plot_idx in range(self.num_of_plots):
-            line, = self.axs_plot[self.row_corrections][plot_idx].step([], [], f'C{5}', label='Correction', where='post')
+            line, = self.axs_plot[self.row_corrections][plot_idx].step([], [], self.cell_types_colors['DCN'][0], label='Correction', where='post')
             self.correction_lines[plot_idx] = line
 
             self.axs_plot[self.row_corrections][plot_idx].set_xlim(0, self.plot_interval)
@@ -2207,8 +2180,6 @@ class Cerebellum:
             self.touch_sensor_values_on[finger_idx] = 0 if val else 0.5
         elif dir == 'neg':
             self.touch_sensor_values_on[finger_idx] = 1 if val else 0.5
-        print(f"self.touch_sensor_values_on={self.touch_sensor_values_on}")
-        #self.touch_sensor_values_off
 
     def update_stimulus_activation(self, ct, input=None):
         for k, _ in enumerate(self.ncs[ct]):
@@ -2230,13 +2201,22 @@ class Cerebellum:
         # Update PN stimuli
         self.update_stimulus_activation(ct='PN', input=input)
     
-    def update_teaching_stimuli(self, current_time, desired_joints, touch_sensor_values_on=None, touch_sensor_values_off=None):
+    def set_err_button(self, name, value):
+        if self.buttons[name].val != value:
+            self._is_updating_programmatically = True
+            self.buttons[name].set_val(value)
+            self._is_updating_programmatically = False
+
+    def update_teaching_stimuli(self, current_time, desired_joints, hw_connected=None, touch_sensor_values_on=None, touch_sensor_values_off=None):
         self.error_times.append(current_time)
         if touch_sensor_values_on: self.touch_sensor_values_on = touch_sensor_values_on
         if touch_sensor_values_off: self.touch_sensor_values_off = touch_sensor_values_off
 
         joint_to_finger_mapping = [0] + [i for i in range(len(self.joints) - 1)] # 2 joints for thumb
         teaching_input = [0] * self.total_cell_numbers['IO']
+
+        detection_threshold = 20 if hw_connected else 0.1
+        overload_threshold = 200 if hw_connected else 0.9
         
         for j_idx, desired_joint in enumerate(desired_joints):
             finger_idx = joint_to_finger_mapping[j_idx]
@@ -2246,44 +2226,33 @@ class Cerebellum:
             touch_off = self.touch_sensor_values_off[finger_idx]
 
             error_dir = 0
+
             # Check mismatches
             if desired_joint == 1:
-                if (touch_off > 0 or touch_on == 0):
+                if (touch_off > detection_threshold or touch_on < detection_threshold):
                     # wanted to grip but failed / released early
                     error_dir = 1 # need positive correction
-                elif touch_on > 0.9:
+                elif touch_on > overload_threshold:
                     # too much pressure applied
                     error_dir = -1 # need negative correction
-            elif desired_joint == 0 and (touch_on or touch_off):
+            elif desired_joint == 0 and (touch_on > detection_threshold or touch_off > detection_threshold):
                 # unwanted contact when joint should be inactive
                 error_dir = -1 # need negative correction
             
-            if error_dir == 1: # need positive correction
-                teaching_input[2 * j_idx] = 1 
-                if self.buttons[f'err_pos{finger_idx}'].val != 1:
-                    self._is_updating_programmatically = True
-                    self.buttons[f'err_pos{finger_idx}'].set_val(1)
-                    self._is_updating_programmatically = False
-                    print(f"set err_pos of finger {finger_idx} to 1")
-            elif error_dir == -1: # need negative correction
-                teaching_input[2 * j_idx + 1] = 1 
-                if self.buttons[f'err_neg{finger_idx}'].val != 1:
-                    self._is_updating_programmatically = True
-                    self.buttons[f'err_neg{finger_idx}'].set_val(1)
-                    self._is_updating_programmatically = False
-                    print(f"set err_neg of finger {finger_idx} to 1")
-            else:
-                if self.buttons[f'err_pos{finger_idx}'].val != 0:
-                    self._is_updating_programmatically = True
-                    self.buttons[f'err_pos{finger_idx}'].set_val(0)
-                    self._is_updating_programmatically = False
-                    print(f"set err_pos of finger {finger_idx} to 0")
-                if self.buttons[f'err_neg{finger_idx}'].val != 0:
-                    self._is_updating_programmatically = True
-                    self.buttons[f'err_neg{finger_idx}'].set_val(0)
-                    self._is_updating_programmatically = False
-                    print(f"set err_neg of finger {finger_idx} to 0")
-
+            err_pos_name = f"err_pos{finger_idx}"
+            err_neg_name = f"err_neg{finger_idx}"
+            if error_dir == 1:  # positive correction
+                teaching_input[2 * j_idx] = 1
+                self.set_err_button(err_pos_name, 1)
+                self.set_err_button(err_neg_name, 0)
+            elif error_dir == -1:  # negative correction
+                teaching_input[2 * j_idx + 1] = 1
+                self.set_err_button(err_pos_name, 0)
+                self.set_err_button(err_neg_name, 1)
+            else:  # neutral
+                self.set_err_button(err_pos_name, 0)
+                self.set_err_button(err_neg_name, 0)
+    
             if j_idx > 0: self.error_over_time[finger_idx].append(error_dir)
 
         # Update IO stimuli
