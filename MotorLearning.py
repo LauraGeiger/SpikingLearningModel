@@ -82,7 +82,6 @@ class MotorLearning:
         self.duration_flexors = 2000 # ms
         self.delay = 500 # ms
         self.hold_time = 3000 # ms
-        #self.joint_duration_mapping = {joint: self.duration_flexors for joint in self.joints}
         self.joint_duration_mapping = {grasp_type: {joint: self.duration_flexors for joint in self.joints} for grasp_type in self.grasp_types + ['None']}
 
         # Valve - Actuators
@@ -400,12 +399,22 @@ class MotorLearning:
                     self.recorded_sensor_data_touch.append(values[self.num_flex_sensors:self.num_flex_sensors+self.num_touch_sensors])
                 except ValueError:
                     print(f"Ignored malformed line: {line}")
-            time.sleep(0.01)  # ~100 Hz sampling
+            time.sleep(0.005)  # ~200 Hz sampling
     
-    def analyze_sensor_data_flex(self, alpha=0.8, flexion_threshold=30, extension_threshold=30):
-        if len(self.recorded_sensor_data_flex[0]) < self.num_flex_sensors:
-            print("Not enough data from flex sensors")
-        else:
+    def analyze_sensor_data_flex(self, alpha=0.8, flexion_threshold=30):
+        print("self.recorded_sensor_data_flex")
+        for row in self.recorded_sensor_data_flex:
+            print(row)
+
+        # Remove invalid data
+        self.recorded_sensor_data_flex = [row for row in self.recorded_sensor_data_flex
+            if len(row) == self.num_flex_sensors and all(int(val) != 0 for val in row)]
+
+        # Remove the first valid row
+        if self.recorded_sensor_data_flex:
+            self.recorded_sensor_data_flex = self.recorded_sensor_data_flex[1:]
+
+        if self.recorded_sensor_data_flex:
             start = [self.recorded_sensor_data_flex[0][i] for i in range(self.num_flex_sensors)]
             prev_filtered = start.copy()
             max_filtered = prev_filtered.copy()
@@ -426,17 +435,30 @@ class MotorLearning:
                 delta_up = max_filtered[i] - start[i]
                 if delta_up > flexion_threshold:
                     flexion_detected[i] = True
-                text = f"{delta_up:.2f} {'Flexion' if flexion_detected[i] else ''}"
+                print(f"{name} start={int(start[i])} max_filtered={int(max_filtered[i])} delta_up={int(delta_up)} flex={int(flexion_detected[i])}")
+                text = f"{delta_up:.2f} {'Flex' if flexion_detected[i] else ''}"
                 self.buttons[f'sensor_flex_{name}'].set_text(text)
             
             self.performed_action = ''.join(['1' if value else '0' for value in flexion_detected])
             self.performed_action = self.performed_action[:len(self.loops[0].actions_names)]
             print(f"performed action = {self.performed_action}")
+        else:
+            print("Not enough data from flex sensors")
 
     def analyze_sensor_data_touch(self, alpha=0.8, touch_threshold=20):
-        if len(self.recorded_sensor_data_touch[0]) < self.num_touch_sensors:
-            print("Not enough data from touch sensors")
-        else:
+        print("self.recorded_sensor_data_touch")
+        for row in self.recorded_sensor_data_touch:
+            print(row)
+
+        # Remove invalid data
+        self.recorded_sensor_data_touch = [row for row in self.recorded_sensor_data_touch
+            if len(row) == self.num_touch_sensors and all(int(val) != 0 for val in row)]
+        
+        # Remove the first valid row
+        if self.recorded_sensor_data_touch:
+            self.recorded_sensor_data_touch = self.recorded_sensor_data_touch[1:]
+
+        if self.recorded_sensor_data_touch:
             start = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
             end = [self.recorded_sensor_data_touch[-1][i] for i in range(self.num_touch_sensors)]
             prev_filtered = start.copy()
@@ -461,7 +483,10 @@ class MotorLearning:
                 self.touch_sensor_values_delta_up[i] = max_filtered[i] - start[i]
                 self.touch_sensor_values_delta_down[i] = max_filtered[i] - end[i] 
                 text = f"{self.touch_sensor_values_delta_up[i]:.2f} {'Touch' if self.touch_sensor_values_delta_up[i] > touch_threshold else ''}"
+                print(f"{name} start={int(start[i])} max_filtered={int(max_filtered[i])} min_filtered={int(min_filtered[i])} delta_up={int(self.touch_sensor_values_delta_up[i])} delta_down={int(self.touch_sensor_values_delta_down[i])} touch={self.touch_sensor_values_delta_up[i] > touch_threshold}")
                 self.buttons[f'sensor_touch_{name}'].set_text(text)
+        else:
+            print("Not enough data from touch sensors")
 
     def update_GUI_goals_actions(self, frame=None):       
         for idx, loop in enumerate(self.loops):
@@ -685,15 +710,16 @@ class MotorLearning:
             self.ser_sensor.flushInput() # delete values in serial input buffer
     
             self.ser_exo.write(action_command.encode())
-            print(f"Write command {action_command}")
+            #print(f"Write command {action_command}")
             time.sleep(3)
 
             self.ser_exo.write(start_stop_command.encode())
-            print("Start command sent")
+            #print("Start command sent")
+            time.sleep((self.duration_actuators+self.delay)/1000)
             print("Read sensor data ...")
             self.read_sensor_data(duration=max_duration+self.hold_time)
             self.ser_exo.write(start_stop_command.encode())
-            print("Stop command sent")
+            #print("Stop command sent")
             time.sleep(3)
     
     def update_joint_duration_mapping(self, time_correction):
@@ -824,7 +850,7 @@ class MotorLearning:
                     self.perform_action()
                     if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
                     if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
-                    print(f"self.touch_sensor_values_delta_up {self.touch_sensor_values_delta_up} \nself.touch_sensor_values_delta_down {self.touch_sensor_values_delta_down}") 
+                    #print(f"self.touch_sensor_values_delta_up {self.touch_sensor_values_delta_up} \nself.touch_sensor_values_delta_down {self.touch_sensor_values_delta_down}") 
                 # --- Reward update ---# 
                 #time_step = time.time()
                 for loop in self.loops:
@@ -2654,7 +2680,7 @@ all_actuators_extensors = [
     "Actuator 11", 
     "Actuator 13"
 ]
-no_of_joints = 4
+no_of_joints = 2
 shuffle = False
 
 grasp_type_joint_indices_mapping = {
