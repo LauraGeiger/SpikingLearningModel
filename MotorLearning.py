@@ -430,6 +430,8 @@ class MotorLearning:
         self.update_arrows()
 
     def read_sensor_data(self, duration=5000):
+        self.ser_sensor.flushInput() # delete values in serial input buffer
+
         self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
         self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
         start_time = time.time()
@@ -754,21 +756,29 @@ class MotorLearning:
             #print(f"Perform action: {self.loops[0].selected_action[0]} max_duration {max_duration}")
             
         if max_duration: # perform action
-            start_stop_command = 'S'
-            self.ser_sensor.flushInput() # delete values in serial input buffer
+            #start_stop_command = 'S'
+            
     
+            # Send action command
             self.ser_exo.write(action_command.encode())
-            #print(f"Write command {action_command}")
-            time.sleep(3)
+            time.sleep(3) # TODO: reduce
 
-            self.ser_exo.write(start_stop_command.encode())
-            #print("Start command sent")
+            # Send start command
+            self.ser_exo.write('Start'.encode())
             time.sleep((self.duration_actuators+self.delay)/1000)
-            #print("Read sensor data ...")
+
+            # Move object down
+            #self.ser_sensor.write(-20)
+
+            # Read sensor data
             self.read_sensor_data(duration=max_duration+self.hold_time)
-            self.ser_exo.write(start_stop_command.encode())
-            #print("Stop command sent")
-            time.sleep(3)
+
+            # Move object up
+            #self.ser_sensor.write(20)
+
+            # Send relax command
+            self.ser_exo.write('Stop'.encode())
+            time.sleep(3) # TODO: reduce
     
     def update_joint_duration_mapping(self, time_correction):
         grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
