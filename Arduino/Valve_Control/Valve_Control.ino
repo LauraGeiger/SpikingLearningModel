@@ -3,6 +3,10 @@
 #include <EEPROM.h>
 #include <HoneywellTruStabilitySPI.h>
 
+
+// Select ESP32 Dev Module
+
+
 // Test command
 // 0-2-i/0-7-i/0-9-i/0-11-i/0-13-i/0-4-i/0-1-i/0-6-i/0-8-i/500-2-h/500-7-h/500-9-h/500-11-h/500-13-h/500-4-h/500-1-h/500-6-h/500-8-h/1000-4-i/1000-1-i/1000-6-i/3000-4-h/3000-1-h/3000-6-h/
 
@@ -33,6 +37,7 @@ struct ActionServo {
 };
 ActionServo actionServo[100];
 int nbr_actions = 0;
+int actionIndex = 0;
 bool executingActions = false;
 bool sequenceOn = false;
 unsigned long startTime = 0;
@@ -84,7 +89,6 @@ void RetriveInletFromEEPROM() {
     Serial.print(") from EEPROM address: ");
     Serial.println(i*2);
   }
-  delay(5000); 
 }
 
 // ====================================
@@ -119,6 +123,7 @@ void printSensors() {
     Serial.print("\t");
   }
   Serial.println();
+  delay(100);
 }
 
 // ====================================
@@ -140,34 +145,23 @@ void setupServos() {
   pwm1.sleep();
 }
 
-void loadCommand(String str) {
-  nbr_actions = 0;
-  for (int i = 0; i < NbrValves; i++) ServoInInlet[i] = 0;
-
-  int in = 0;
-  while (true) {
-    int in2 = str.indexOf("/", in);
-    int in3 = str.indexOf("-", in);
-    int in4 = str.indexOf("-", in3 + 1);
-    if (in2 == -1 || in3 == -1 || in4 == -1) break;
-
-    String timeStr = str.substring(in, in3);
-    String servoStr = str.substring(in3 + 1, in4);
-    String actionStr = str.substring(in4 + 1, in2);
-
-    actionServo[nbr_actions].t = timeStr.toInt();
-    actionServo[nbr_actions].servoNbr = servoStr.toInt() - 1;
-    actionServo[nbr_actions].act = actionStr[0];
-    actionServo[nbr_actions].done = false;
-
-    nbr_actions++;
-    in = in2 + 1;
-  }
-  Serial.println("Command loaded, waiting for 'S' to start...");
-}
-
 void startSequence() {
-  for (int i = 0; i < nbr_actions; i++) actionServo[i].done = false;
+  if (actionIndex > 0) {
+    nbr_actions = actionIndex;
+    actionIndex = 0;
+  }
+  for (int i = 0; i < nbr_actions; i++) {
+    actionServo[i].done = false;
+    
+    Serial.print(actionServo[i].t);
+    Serial.print("\t");
+    Serial.print(actionServo[i].servoNbr);
+    Serial.print("\t");
+    Serial.print(actionServo[i].act);
+    Serial.print("\n");  
+  }
+  Serial.print("nbr_actions: "); 
+  Serial.println(nbr_actions);
   startTime = millis();
   executingActions = true;
   Serial.println("Sequence started!");
@@ -188,7 +182,6 @@ void stopSequence() {
 
 void toggleSequence() {
     sequenceOn = !sequenceOn;
-
     if (sequenceOn) startSequence();
     else stopSequence();
 }
@@ -197,7 +190,7 @@ void updateServos() {
   if (!executingActions) return;
   unsigned long now = millis() - startTime;
   int InletSum = 0;
-
+  pwm1.wakeup();
   for (int i = 0; i < nbr_actions; i++) {
     if (!actionServo[i].done && now >= actionServo[i].t) {
       int val;
@@ -205,44 +198,88 @@ void updateServos() {
         case 'i': val = serINLET[actionServo[i].servoNbr]; ServoInInlet[actionServo[i].servoNbr] = 1; break;
         case 'o': val = serOUTLET[actionServo[i].servoNbr]; ServoInInlet[actionServo[i].servoNbr] = 0; break;
         case 'h': val = serHOLD[actionServo[i].servoNbr]; ServoInInlet[actionServo[i].servoNbr] = 0; break;
-        default: val = serOUTLET[actionServo[i].servoNbr]; break;
+        default: val = serOUTLET[actionServo[i].servoNbr]; ServoInInlet[actionServo[i].servoNbr] = 0; break;
       }
-
-      pwm1.wakeup();
       pwm1.setPWM(actionServo[i].servoNbr, 0, val);
-      delay(200);
-      pwm1.sleep();
-
       actionServo[i].done = true;
     }
     InletSum += ServoInInlet[actionServo[i].servoNbr];
   }
-
+  delay(200);
   analogWrite(PumpPWM6, InletSum > 0 ? 255 : 0);
 
   bool allDone = true;
   for (int i = 0; i < nbr_actions; i++) if (!actionServo[i].done) allDone = false;
-  if (allDone) executingActions = false;
+  if (allDone) {
+    pwm1.sleep();
+    executingActions = false;
+  }
 }
 
 // ====================================
 // Serial reading
 // ====================================
-void readSerial() {
-  if (Serial3.available()) {
-    String cmd = Serial3.readStringUntil('\n');
-    if(cmd == "S") toggleSequence(); 
-    else if(cmd == "Start") startSequence(); 
-    else if(cmd == "Stop") stopSequence(); 
-    else loadCommand(cmd);
+#define TOKEN_BUFFER_SIZE 64
+char tokenBuffer[TOKEN_BUFFER_SIZE];
+int tokenIndex = 0;
+
+void parseToken(const char* token) {
+  // Handle special commands
+  if (strcmp(token, "S") == 0) {
+    toggleSequence();
+    return;
+  } else if (strcmp(token, "Start") == 0) {
+    startSequence();
+    return;
+  } else if (strcmp(token, "Stop") == 0) {
+    stopSequence();
+    return;
   }
 
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    if(cmd == "S") toggleSequence(); 
-    else if(cmd == "Start") startSequence(); 
-    else if(cmd == "Stop") stopSequence(); 
-    else loadCommand(cmd);
+  // Parse servo action: time-servo-act
+  int dash1 = -1, dash2 = -1;
+  for (int i = 0; token[i] != '\0'; i++) {
+    if (token[i] == '-' && dash1 == -1) dash1 = i;
+    else if (token[i] == '-' && dash2 == -1) dash2 = i;
+  }
+  if (dash1 == -1 || dash2 == -1) return;
+
+  String timeStr   = String(token).substring(0, dash1);
+  String servoStr  = String(token).substring(dash1 + 1, dash2);
+  String actionStr = String(token).substring(dash2 + 1);
+
+  if (actionIndex < 100) {
+    actionServo[actionIndex].t = timeStr.toInt();
+    actionServo[actionIndex].servoNbr = servoStr.toInt() - 1;
+    actionServo[actionIndex].act = actionStr[0];
+    actionServo[actionIndex].done = false;
+    actionIndex++;
+  }
+}
+
+void processChar(char c) {
+  if (c == '\n' || c == '/') {
+    if (tokenIndex > 0) {
+      tokenBuffer[tokenIndex] = '\0';   // terminate string
+      parseToken(tokenBuffer);          // parse immediately
+      tokenIndex = 0;
+    }
+  } else if (c != '\r') {  // ignore CR
+    if (tokenIndex < TOKEN_BUFFER_SIZE - 1) {
+      tokenBuffer[tokenIndex++] = c;
+    } else {
+      Serial.println("ERROR: token too long!");
+      tokenIndex = 0; // reset on overflow
+    }
+  }
+}
+
+void readSerial() {
+  while (Serial.available()) {
+    processChar(Serial.read());
+  }
+  while (Serial3.available()) {
+    processChar(Serial3.read());
   }
 }
 
@@ -269,5 +306,5 @@ void loop() {
   updateServos(); // non-blocking servo execution
   readSensors();  // read sensors without blocking
   //printSensors(); // print sensor values
-  delay(100);     // small delay to avoid flooding Serial
+  delay(1);       // small delay to avoid flooding Serial
 }

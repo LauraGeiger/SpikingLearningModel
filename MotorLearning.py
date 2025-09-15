@@ -347,28 +347,40 @@ class MotorLearning:
             plt.pause(0.001)
 
             # Define serial connection for sensor feedback
-            try:
-                self.ser_sensor.open()
-                print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
-
-            except Exception:
+            if self.ser_sensor:
+                if self.ser_sensor.is_open:
+                    print(f"Serial connection to sensors already open on port {self.ser_sensor.port}")
+                else:
+                    try:
+                        self.ser_sensor.open()
+                        print(f"Serial connection to sensors opened on port {self.ser_sensor.port}")
+                    except Exception: 
+                        successful = False
+                        print(f"Serial connection to sensors failed due to exception: {e}")
+            else:
                 try:
                     self.ser_sensor = serial.Serial(
                         port='COM7',        # For ESP32
                         baudrate=115200,    # Baud rate for serial connection to sensors
                         timeout=1           # Timeout for read in seconds
                     )
-                    print(f"Serial connection to sensors established on port {self.ser_sensor.port}")
-                    
+                    print(f"Serial connection to sensors established on port {self.ser_sensor.port}")  
                 except Exception as e:
                     successful = False
                     print(f"Serial connection to sensors failed due to exception: {e}")
             
             # Define serial connection via bluetooth to exoskeleton
-            try:
-                self.ser_exo.open()
-                print(f"Serial connection to exoskeleton established on port {self.ser_exo.port}")
-            except Exception:
+            if self.ser_exo:
+                if self.ser_exo.is_open:
+                    print(f"Serial connection to exoskeleton already open on port {self.ser_exo.port}")
+                else:
+                    try:
+                        self.ser_exo.open()
+                        print(f"Serial connection to exoskeleton opened on port {self.ser_exo.port}")
+                    except Exception:
+                        successful = False
+                        print(f"Serial connection to exoskeleton failed due to exception: {e}")
+            else:
                 try:
                     self.ser_exo = serial.Serial(
                         port='COM11',       # For HC-06
@@ -761,6 +773,7 @@ class MotorLearning:
     
             # Send action command
             self.ser_exo.write(action_command.encode())
+            print(action_command)
             time.sleep(3) # TODO: reduce
 
             # Send start command
@@ -768,13 +781,13 @@ class MotorLearning:
             time.sleep((self.duration_actuators+self.delay)/1000)
 
             # Move object down
-            #self.ser_sensor.write(-20)
+            #self.ser_sensor.write('-20'.encode())
 
             # Read sensor data
             self.read_sensor_data(duration=max_duration+self.hold_time)
 
             # Move object up
-            #self.ser_sensor.write(20)
+            #self.ser_sensor.write('20'.encode())
 
             # Send relax command
             self.ser_exo.write('Stop'.encode())
