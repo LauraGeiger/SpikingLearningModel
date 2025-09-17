@@ -158,7 +158,7 @@ void startSequence() {
     Serial.print(actionServo[i].servoNbr);
     Serial.print("\t");
     Serial.print(actionServo[i].act);
-    Serial.print("\n");  
+    Serial.print("\n");
   }
   Serial.print("nbr_actions: "); 
   Serial.println(nbr_actions);
@@ -181,9 +181,9 @@ void stopSequence() {
 }
 
 void toggleSequence() {
-    sequenceOn = !sequenceOn;
-    if (sequenceOn) startSequence();
-    else stopSequence();
+  sequenceOn = !sequenceOn;
+  if (sequenceOn) startSequence();
+  else stopSequence();
 }
 
 void updateServos() {
@@ -225,6 +225,7 @@ int tokenIndex = 0;
 
 void parseToken(const char* token) {
   // Handle special commands
+  Serial.println(token);
   if (strcmp(token, "S") == 0) {
     toggleSequence();
     return;
@@ -258,6 +259,7 @@ void parseToken(const char* token) {
 }
 
 void processChar(char c) {
+  Serial.println(c);
   if (c == '\n' || c == '/') {
     if (tokenIndex > 0) {
       tokenBuffer[tokenIndex] = '\0';   // terminate string

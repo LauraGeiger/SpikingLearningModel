@@ -86,9 +86,9 @@ class MotorLearning:
         self.touch_sensor_values_delta_down = [0] * self.num_touch_sensors
         self.touch_expected_max_delta_up = [100] * self.num_touch_sensors
         self.touch_expected_max_delta_down = [100] * self.num_touch_sensors
-        self.duration_actuators = 500 # ms
+        self.duration_actuators = 100 # ms
         self.duration_flexors = 2000 # ms
-        self.delay = 500 # ms
+        self.delay = 100 # ms
         self.hold_time = 3000 # ms
         self.joint_duration_mapping = {grasp_type: {joint: self.duration_flexors for joint in self.joints} for grasp_type in self.grasp_types + ['None']}
 
@@ -769,35 +769,31 @@ class MotorLearning:
             
         if max_duration: # perform action
             #start_stop_command = 'S'
-            
     
             # Send action command
             self.ser_exo.write(action_command.encode())
-            print(action_command)
-            time.sleep(3) # TODO: reduce
 
             # Send start command
-            self.ser_exo.write('Start'.encode())
+            self.ser_exo.write('Start\n'.encode())
             time.sleep((self.duration_actuators+self.delay)/1000)
 
             # Move object down
-            #self.ser_sensor.write('-20'.encode())
+            self.ser_sensor.write('M:-20'.encode())
 
             # Read sensor data
             self.read_sensor_data(duration=max_duration+self.hold_time)
-
+            
             # Move object up
-            #self.ser_sensor.write('20'.encode())
+            self.ser_sensor.write('M:20'.encode())
 
             # Send relax command
-            self.ser_exo.write('Stop'.encode())
-            time.sleep(3) # TODO: reduce
+            self.ser_exo.write('Stop\n'.encode())
     
     def update_joint_duration_mapping(self, time_correction):
         grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
         for joint_id, corr in enumerate(time_correction):
             if abs(corr) >= 10:
-                self.joint_duration_mapping[grasp_type][self.joints[joint_id]] += corr 
+                self.joint_duration_mapping[grasp_type][self.joints[joint_id]] += int(corr) * 10
 
     def calculate_goal_action_mapping(self, weights_over_time, selected_goal_idx=None):
         sums_counts = {}
@@ -2732,7 +2728,7 @@ class Cerebellum:
         self.correction_times.append(current_time)
         self.DCN_diff_rates = self.analyze_firing_rate('DCN')
         for joint_idx, corr in enumerate(self.DCN_diff_rates):
-            self.correction_over_time[joint_idx].append(corr)
+            self.correction_over_time[joint_idx].append(int(corr))
     
     def save_data(self, path):
         # Workbook

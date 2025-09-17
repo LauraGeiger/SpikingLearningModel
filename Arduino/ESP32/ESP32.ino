@@ -69,14 +69,15 @@ void loop() {
     if (Serial.available()) {
         String input = Serial.readStringUntil('\n');
         input.trim(); // remove whitespace
-        if (input.length() > 0) {
-            int move_mm = input.toInt(); 
+        if (input.startsWith("M:")) {
+            int move_mm = input.substring(2).toInt(); // Ignore the first 2 characters "M:"
             long targetSteps = move_mm * STEPS_PER_MM; 
             stepper.move(targetSteps);
-            Serial.printf("Moving: %d mm (%ld steps)\n", move_mm, targetSteps);
+            //Serial.printf("Moving: %d mm (%ld steps)\n", move_mm, targetSteps);
             while (stepper.distanceToGo() != 0) { 
                 stepper.run(); 
             }
+            
         }
     }
 }
