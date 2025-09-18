@@ -15,16 +15,6 @@ from datetime import datetime
 from itertools import product
 from matplotlib.ticker import FuncFormatter
 
-# --- TODO --------------------------------------------------#
-# Determine dopamine level from rel SNc rate
-# How to store weights (especially from prefrontal loop)
-# Check transistion between grasping types (once learned, there shall be no dip in reward)
-# Check connections (other than cor-str) need to be fully connected
-# Check if the same neurons can be used across actions
-# Check if 5 neurons are required or if less are sufficient
-# Check if basal ganglia and cerebellum should get input from somatosensory cortex regions (such that sensor feedback can also lead to synaptic plasticity)
-# --- TODO --------------------------------------------------#
-
 
 h.load_file("stdrun.hoc")    
 
@@ -59,7 +49,7 @@ class MotorLearning:
 
         if self.basal_ganglia_required:
             bg_ml = BasalGangliaLoop('MotorLoop', input=self.joints, output=self.actuators_flexors, goal_action_table=self.joint_actuator_table, actions_to_plot=6, plot_interval=self.plot_interval)
-            bg_pl = BasalGangliaLoop('PrefrontalLoop', input=self.grasp_types, output=self.joints, binary_input=True, single_goal=True, goal_action_table=self.grasp_type_joint_table, actions_to_plot=6, plot_interval=self.plot_interval, child_loop=bg_ml)
+            bg_pl = BasalGangliaLoop('PremotorLoop', input=self.grasp_types, output=self.joints, binary_input=True, single_goal=True, goal_action_table=self.grasp_type_joint_table, actions_to_plot=6, plot_interval=self.plot_interval, child_loop=bg_ml)
             self.loops = [bg_ml, bg_pl] # loops ordered from low-level to high-level
         if self.cerebellum_required:
             self.cerebellum = Cerebellum(grasp_types=self.grasp_types, joints=self.joints, actuators=self.actuators_flexors, plot_interval=self.plot_interval)
@@ -447,6 +437,7 @@ class MotorLearning:
         self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
         self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
         start_time = time.time()
+
         while time.time() - start_time < duration / 1000:
             if self.ser_sensor.in_waiting > 0:
                 line = self.ser_sensor.readline().decode('utf-8', errors='ignore').strip()
@@ -492,7 +483,6 @@ class MotorLearning:
                 delta_up = max_filtered[i] - start[i]
                 if delta_up > flexion_threshold:
                     flexion_detected[i] = True
-                #print(f"{name} start={int(start[i])} max_filtered={int(max_filtered[i])} delta_up={int(delta_up)} flex={int(flexion_detected[i])}")
                 text = f"{delta_up:.0f} {'Flex' if flexion_detected[i] else ''}"
                 self.buttons[f'sensor_flex_{name}'].set_text(text)
             
@@ -541,7 +531,6 @@ class MotorLearning:
                 self.touch_expected_max_delta_down[i] = 0.5 * self.touch_expected_max_delta_down[i] + 0.5 * self.touch_sensor_values_delta_down[i]
 
                 text = f"{self.touch_sensor_values_delta_up[i]:.0f} {'Touch' if self.touch_sensor_values_delta_up[i] > touch_threshold else ''}"
-                #print(f"{name} start={int(start[i])} max_filtered={int(max_filtered[i])} min_filtered={int(min_filtered[i])} delta_up={int(self.touch_sensor_values_delta_up[i])} delta_down={int(self.touch_sensor_values_delta_down[i])} touch={self.touch_sensor_values_delta_up[i] > touch_threshold}")
                 self.buttons[f'sensor_touch_{name}'].set_text(text)
         else:
             print("Not enough data from touch sensors")
@@ -737,7 +726,6 @@ class MotorLearning:
             if bit == '1':
                 flexor = self.actuators_flexors[i]
                 flexor_number = flexor.split()[-1]
-                # Inlet position
                 action_command_parts.append(f"{(self.delay + self.duration_actuators)}-{flexor_number}-i")
 
         max_flexion_duration = 0
@@ -746,7 +734,7 @@ class MotorLearning:
                 flexor = self.actuators_flexors[i]
                 joint = next((g for g, a in self.loops[0].learned_goal_action_map.items() if flexor in a), None)
                 grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
-                duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else None
+                duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else 0
 
                 if duration and duration > max_flexion_duration:
                     max_flexion_duration = duration
@@ -778,13 +766,13 @@ class MotorLearning:
             time.sleep((self.duration_actuators+self.delay)/1000)
 
             # Move object down
-            self.ser_sensor.write('M:-20'.encode())
+            #self.ser_sensor.write('M:-20'.encode())
 
             # Read sensor data
             self.read_sensor_data(duration=max_duration+self.hold_time)
             
             # Move object up
-            self.ser_sensor.write('M:20'.encode())
+            #self.ser_sensor.write('M:20'.encode())
 
             # Send relax command
             self.ser_exo.write('Stop\n'.encode())
@@ -953,20 +941,14 @@ class MotorLearning:
                     if loop.selected_goal: loop.cortical_input_stimuli(current_time=h.t)
                     
                 # Run simulation
-                #time_step = time.time()
                 h.continuerun(h.t + self.plot_interval)
-                #if time.time() - time_step > 1: print(f"{(time.time() - time_step):.6f} s continuerun")
 
                 # --- Action selection ---# 
-                #time_step = time.time()
                 for loop in self.loops:
                     loop.analyze_thalamus_activation_time(current_time=h.t)
                     loop.select_action()
-                #if time.time() - time_step > 1: 
-                #print(f"{(time.time() - time_step):.6f} s action selection")
 
                 # Cerebellum update input
-                #time_step = time.time()
                 if cerebellum_active:
                     desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
                     desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
@@ -977,8 +959,6 @@ class MotorLearning:
                     norm_touch_delta_up = [min(1.0, delta_up / max_delta_up) for delta_up, max_delta_up in zip(self.touch_sensor_values_delta_up, self.touch_expected_max_delta_up)]
                     norm_touch_delta_down = [min(1.0, delta_down / max_delta_down) for delta_down, max_delta_down in zip(self.touch_sensor_values_delta_down, self.touch_expected_max_delta_down)]
                     self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, norm_touch_delta_up, norm_touch_delta_down)
-                #if time.time() - time_step > 1: 
-                #print(f"{(time.time() - time_step):.6f} s cerebellum update input")
 
                 self.update_GUI_goals_actions()
 
@@ -989,48 +969,28 @@ class MotorLearning:
                 else:
                     self.touch_sensor_values_delta_up = self.cerebellum.touch_sensor_values_delta_up
                     self.touch_sensor_values_delta_down = self.cerebellum.touch_sensor_values_delta_down
-                #print(f"self.touch_sensor_values_delta_up {self.touch_sensor_values_delta_up} \nself.touch_sensor_values_delta_down {self.touch_sensor_values_delta_down}") 
+                
                 # --- Reward update ---# 
-                #time_step = time.time()
                 for loop in self.loops:
                     loop.determine_reward(current_time=h.t, hw_connected=self.hw_connected, performed_action=self.performed_action)
-                #if time.time() - time_step > 1: 
-                #print(f"{(time.time() - time_step):.6f} s determine reward")
 
                 # Cerebellum trigger teaching signal (IO)
-                #time_step = time.time()
                 if cerebellum_active:
                     self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints, action_selection_completed=True, touch_sensor_values_delta_up=self.touch_sensor_values_delta_up, touch_sensor_values_delta_down=self.touch_sensor_values_delta_down) 
-                #if time.time() - time_step > 1: 
-                #print(f"{(time.time() - time_step):.6f} s cerebellum teaching signal")
 
                 self.update_GUI_performed_action_reward()
 
                 # --- Weight and plot update ---# 
-                #time_step = time.time()
                 for loop in self.loops:
                     loop.update_weights(current_time=h.t)
                     loop.update_plots(current_time=h.t)
-                #if time.time() - time_step > 1: 
-                #print(f"{(time.time() - time_step):.6f} s update weights and plots")
 
                 # Cerebellum update weights and plot
-                #time_step = time.time()
                 if cerebellum_active:
-                    #time_step = time.time()
                     self.cerebellum.update_weights(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s cerebellum update weights")
-                    #time_step = time.time()
                     self.cerebellum.update_plots(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s cerebellum update plots")
-                    #time_step = time.time()
                     self.cerebellum.calculate_correction(current_time=h.t)
-                    #print(f"{(time.time() - time_step):.6f} s cerebellum calculate correction")
-                    #time_step = time.time()
                     self.update_joint_duration_mapping(time_correction=self.cerebellum.DCN_diff_rates)
-                    #print(f"{(time.time() - time_step):.6f} s cerebellum update joint duration mapping")
-                #if time.time() - time_step > 1: 
-                #print(f"{(time.time() - time_step):.6f} s cerebellum update weights and plots")
 
                 duration = time.time() - start_time
                 self.durations[self.iteration] = round(duration, 2)
@@ -1636,19 +1596,22 @@ class BasalGangliaLoop:
     
     def determine_reward(self, current_time, hw_connected=None, performed_action=None):
         self.reward_times.append(int(current_time))
-            
+
         goal_state = tuple((goal_name, dur != 0) for goal_name, dur in zip(self.goals_names, self.cortical_input_dur_rel))
         target_action_dict = self.goal_action_table.get(goal_state, {})
-        
+                  
         for goal in self.goals:
             if hw_connected and not self.child_loop and performed_action:
-                action_dict = dict(zip(self.actions_names, [c == '1' for c in performed_action]))
+                #action_dict = dict(zip(self.actions_names, [c == '1' for c in performed_action]))
+                action_correct = performed_action == self.selected_goal
             elif self.selected_action:
                 action_dict = dict(zip(self.actions_names, [c == '1' for c in self.selected_action[0]]))
+                action_correct = action_dict == target_action_dict
             else:
-                action_dict = {}
-
-            if goal == self.selected_goal and action_dict == target_action_dict:
+                #action_dict = {}
+                action_correct = False
+            
+            if goal == self.selected_goal and action_correct:
                 self.reward_over_time[goal].append(1)
             else:
                 self.reward_over_time[goal].append(0)
@@ -2431,12 +2394,9 @@ class Cerebellum:
         if norm_touch_delta_up: input.extend(norm_touch_delta_up)
         if norm_touch_delta_down: input.extend(norm_touch_delta_down)
 
-        #print(f"input={input}")
-        
         # Update PN stimuli
         relative_baseline = 0.4
         input_with_baseline_spiking = [(1 - relative_baseline) * val + relative_baseline for val in input]
-        #print(f"input_with_baseline_spiking={input_with_baseline_spiking}")
         self.update_stimulus_activation(ct='PN', input=input_with_baseline_spiking)
     
     def set_err_button(self, name, value):
@@ -2488,8 +2448,7 @@ class Cerebellum:
                     self.set_err_button(err_pos_name, 0)
                     self.set_err_button(err_neg_name, 0)
             self.error_over_time[j_idx].append(error_dir)
-            #print(f"j_id={j_idx} f_id={finger_idx} desired_j={desired_joint} touch_on={touch_on} touch_off={touch_off} err_dir={error_dir}")
-
+            
         # Update IO stimuli
         self.update_stimulus_activation(ct='IO', input=teaching_input)
 
@@ -2943,7 +2902,7 @@ all_actuators_extensors = [
     "Actuator 13"
 ]
 no_of_joints = 4
-shuffle = False
+shuffle = True
 
 grasp_type_joint_indices_mapping = {
     "100": "1" * min(3, no_of_joints) + "0" * (no_of_joints - min(3, no_of_joints)),
