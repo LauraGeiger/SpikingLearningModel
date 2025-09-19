@@ -2,43 +2,56 @@
 install.packages("tidyverse")
 install.packages("readxl")
 install.packages("ggplot2")
+remove.packages("rlang")
+install.packages("rlang")
+install.packages("ggstatsplot")
+
 
 # Load packages
 library(tidyverse)
 library(readxl)
 library(ggplot2)
-
-#windows()
+library(ggstatsplot)
 
 data <- read_excel("01_Exp_BG_Training_Iterations.xlsx")
 
-# Inspect the data
-glimpse(data)
-
 data <- data %>%
-  mutate(Iterations = as.numeric(Iterations))
+  mutate(
+    Iterations = as.numeric(Iterations),
+    Loop = as.factor(Loop),
+    GroupNameLabel = gsub(" \\(", "\n(", GroupName),
+    GroupNameOrdered = factor(GroupNameLabel, levels = unique(GroupNameLabel[order(Group)]))
+  )
 
-ggplot(data %>% filter(!is.na(Iterations)), 
-        aes(x = Loop, y = Iterations, fill = Group)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  facet_wrap(~Group) +
-  labs(title = "Iterations required for learning per loop type",
-       x = "Loop Type",
-       y = "Iterations") +
-  theme_minimal()
+# --- Motor loop plot ---
+data_motor <- data %>% filter(Loop == "Motor")
 
+ggstatsplot::ggbetweenstats(
+  data = data_motor,
+  x = GroupNameOrdered,             # experiment type
+  y = Iterations,
+  type = "parametric",   # or "nonparametric"
+  results.subtitle = FALSE,
+  pairwise.display = "none",
+  plot.type = "violin",
+  ggtheme = ggplot2::theme_minimal(),
+  title = "Motor Loop: Iterations required for learning"
+) + labs(x = NULL)
 
+# --- Premotor loop plot ---
+data_premotor <- data %>% filter(Loop == "Premotor")
 
+ggstatsplot::ggbetweenstats(
+  data = data_premotor,
+  x = GroupNameOrdered,
+  y = Iterations,
+  type = "parametric",
+  results.subtitle = FALSE,
+  pairwise.display = "none",
+  plot.type = "violin",
+  ggtheme = ggplot2::theme_minimal(),
+  title = "Premotor Loop: Iterations required for learning"
+) + labs(x = NULL) 
 
-summary_data <- data %>%
-  group_by(Group, Loop) %>%
-  summarize(avg_iterations = mean(Iterations, na.rm = TRUE))
-
-print(ggplot(summary_data, aes(x = Loop, y = avg_iterations, fill = Group)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(title = "Average iterations required per loop type",
-       x = "Loop Type",
-       y = "Average Iterations") +
-  theme_minimal())
 
 

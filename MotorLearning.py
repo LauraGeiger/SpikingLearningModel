@@ -912,12 +912,13 @@ class MotorLearning:
                 
                 start_time = time.time()
 
-                cerebellum_active = True if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) else False
+                cerebellum_active = True if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) and all(not loop.training for loop in self.loops) else False
                 
                 for idx, loop in enumerate(self.loops):
                     
                     if loop.selected_goal and loop.expected_reward_over_time[loop.selected_goal][-1] > 0.5:
-                        if loop.training: self.training_goal_idx += 1
+                        if loop.training: 
+                            self.training_goal_idx += 1
                         map = self.calculate_goal_action_mapping(loop.weights_over_time, loop.goals.index(loop.selected_goal))
                         for goal_idx, action_idx in map.items():
                             goals_names_list = [loop.goals_names[i] for i, val in enumerate(loop.goals[goal_idx]) if val == '1']
