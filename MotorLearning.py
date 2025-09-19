@@ -553,7 +553,7 @@ class MotorLearning:
 
                     joint = next((g for g, a in loop.learned_goal_action_map.items() if name in a), None)
                     grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
-                    duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else None
+                    duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else self.duration_flexors
                     self.buttons[f'duration_actuator_{name}'].set_text(f'{duration} ms' if duration else '')
             elif loop.training:
                 for i, name in enumerate(loop.actions_names):
@@ -708,7 +708,7 @@ class MotorLearning:
         for name in selected_actions_names:
             joint = next((g for g, a in self.loops[0].learned_goal_action_map.items() if name in a), None)
             grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
-            duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else None
+            duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else self.duration_flexors
             self.buttons[f'duration_actuator_{name}'].set_text(f'{duration} ms' if duration else '')
         
         action_command_parts = []
@@ -734,7 +734,7 @@ class MotorLearning:
                 flexor = self.actuators_flexors[i]
                 joint = next((g for g, a in self.loops[0].learned_goal_action_map.items() if flexor in a), None)
                 grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
-                duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else 0
+                duration = self.joint_duration_mapping[grasp_type].get(joint, 0) if joint else self.duration_flexors
 
                 if duration and duration > max_flexion_duration:
                     max_flexion_duration = duration
