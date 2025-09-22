@@ -79,8 +79,9 @@ class MotorLearning:
         self.duration_actuators = 100 # ms
         self.duration_flexors = 2000 # ms
         self.delay = 100 # ms
-        self.hold_time = 3000 # ms
+        self.hold_time = 5000 # ms
         self.joint_duration_mapping = {grasp_type: {joint: self.duration_flexors for joint in self.joints} for grasp_type in self.grasp_types + ['None']}
+        self.stepper_motor_low = False
 
         # Valve - Actuators
         #  1 - Thumb flexor
@@ -431,11 +432,12 @@ class MotorLearning:
         self.loops_texts[loop_idx].set_text(f'{self.loops[loop_idx].name}\npretrained')
         self.update_arrows()
 
-    def read_sensor_data(self, duration=5000):
-        self.ser_sensor.flushInput() # delete values in serial input buffer
+    def read_sensor_data(self, duration=5000, reset=True):
+        if reset:
+            self.ser_sensor.flushInput() # delete values in serial input buffer
+            self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
+            self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
 
-        self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
-        self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
         start_time = time.time()
 
         while time.time() - start_time < duration / 1000:
@@ -748,7 +750,7 @@ class MotorLearning:
         
         return action_command, max_duration
 
-    def perform_action(self):
+    def perform_action(self, grasping=False):
         max_duration = 0
         
         if self.loops[0].selected_action:
@@ -765,17 +767,33 @@ class MotorLearning:
             self.ser_exo.write('Start\n'.encode())
             time.sleep((self.duration_actuators+self.delay)/1000)
 
-            # Move object down
-            #self.ser_sensor.write('M:-20'.encode())
-
             # Read sensor data
-            self.read_sensor_data(duration=max_duration+self.hold_time)
+            #self.read_sensor_data(duration=max_duration+self.hold_time)
+
+            # Read sensor data during grasping
+            self.read_sensor_data(duration=max_duration)
+
+            if grasping:
+                # Move object down
+                self.ser_sensor.write('M:-10'.encode())
+                self.stepper_motor_low = True
+
+                # Read sensor data during holding
+                self.read_sensor_data(duration=self.hold_time, reset=False)
             
-            # Move object up
-            #self.ser_sensor.write('M:20'.encode())
+            time.sleep(3)
 
             # Send relax command
             self.ser_exo.write('Stop\n'.encode())
+
+            if grasping and self.stepper_motor_low == True:
+                # Move object up
+                self.ser_sensor.write('M:10'.encode())
+                time.sleep(6)
+                self.stepper_motor_low = False
+
+            #if grasping:
+            #    self.toggle_pause()
     
     def update_joint_duration_mapping(self, time_correction):
         grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
@@ -935,8 +953,10 @@ class MotorLearning:
                         continue
                 
                 start_time = time.time()
-
-                cerebellum_active = True if self.cerebellum_required and all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) and all(not loop.training for loop in self.loops) else False
+                
+                #grasping = True 
+                grasping = True if all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) and all(not loop.training for loop in self.loops) else False
+                cerebellum_active = True if self.cerebellum_required and grasping else False
                 
                 for idx, loop in enumerate(self.loops):
                     
@@ -989,7 +1009,7 @@ class MotorLearning:
                 self.update_GUI_goals_actions()
 
                 if self.hw_connected:
-                    self.perform_action()
+                    self.perform_action(grasping)
                     if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
                     if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
                 else:

@@ -63,8 +63,8 @@ void loop() {
         if (s < numSensors-1) Serial.print(",");  // Add comma except for last value
     }
     Serial.println();  // Newline to mark end of data packet
-    delay(100);
-
+    //delay(100);
+    
     // Move stepper motor
     if (Serial.available()) {
         String input = Serial.readStringUntil('\n');
@@ -74,10 +74,11 @@ void loop() {
             long targetSteps = move_mm * STEPS_PER_MM; 
             stepper.move(targetSteps);
             //Serial.printf("Moving: %d mm (%ld steps)\n", move_mm, targetSteps);
-            while (stepper.distanceToGo() != 0) { 
-                stepper.run(); 
-            }
+            //while (stepper.distanceToGo() != 0) { 
+            //    stepper.run(); 
+            //}
             
         }
     }
+    stepper.run(); 
 }
