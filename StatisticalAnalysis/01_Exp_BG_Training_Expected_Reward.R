@@ -44,7 +44,8 @@ load_experiment <- function(folder) {
 all_data <- map_dfr(exp_folders, load_experiment)
 
 all_data <- all_data %>%
-  mutate(iteration = time / 100, reward = reward * 100)
+  mutate(iteration = time / 100, 
+    reward = reward * 100)
 
 
 ggplot(all_data, aes(

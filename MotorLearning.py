@@ -893,6 +893,30 @@ class MotorLearning:
         # Save
         wb.save(f"{path_extented}.xlsx") # Excel
         print(path_extented)
+
+    def get_current_average_weight_diff(self, loop):
+        current_avg_weight = {}
+        current_avg_weight_diff = 0
+
+        selected_goal = loop.selected_goal if loop.selected_goal else None
+        selected_action = loop.selected_action[0] if loop.selected_action else None
+        goal_id = loop.goals.index(selected_goal) if selected_goal else None
+        action_id = loop.actions.index(selected_action) if selected_action else None
+
+        if goal_id is not None and action_id is not None:
+            for cor_id in range(loop.cell_types_numbers['Cor'][1]):
+                for ct in loop.weight_cell_types:
+                    current_avg_weight[ct] = 0
+                    for msn_id in range(loop.cell_types_numbers[ct][1]):
+                        key = (ct, action_id, msn_id, goal_id, cor_id)
+                        current_avg_weight[ct] += loop.weights_over_time[key][-1]
+                    current_avg_weight[ct] = current_avg_weight[ct] / loop.cell_types_numbers[ct][1]
+        
+        if 'MSNd' in current_avg_weight and 'MSNi' in current_avg_weight:
+            current_avg_weight_diff = current_avg_weight['MSNd'] - current_avg_weight['MSNi']
+        
+        return current_avg_weight_diff 
+        
                     
     def run_simulation(self):
         try:
@@ -916,7 +940,8 @@ class MotorLearning:
                 
                 for idx, loop in enumerate(self.loops):
                     
-                    if loop.selected_goal and loop.expected_reward_over_time[loop.selected_goal][-1] > 0.5:
+                    #if loop.selected_goal and loop.expected_reward_over_time[loop.selected_goal][-1] > 0.5:
+                    if loop.selected_goal and self.get_current_average_weight_diff(loop) > 0.75:
                         if loop.training: 
                             self.training_goal_idx += 1
                         map = self.calculate_goal_action_mapping(loop.weights_over_time, loop.goals.index(loop.selected_goal))

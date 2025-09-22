@@ -53,5 +53,16 @@ ggstatsplot::ggbetweenstats(
   title = "Premotor Loop: Iterations required for learning"
 ) + labs(x = NULL) 
 
+ggstatsplot::ggbetweenstats(
+  data = data_premotor,
+  x = GroupNameOrdered,
+  y = StopIteration,
+  type = "parametric",
+  results.subtitle = FALSE,
+  pairwise.display = "none",
+  plot.type = "violin",
+  ggtheme = ggplot2::theme_minimal(),
+  title = "Both Loops: Iterations required for learning"
+) + labs(x = NULL, y = "Iterations") 
 
 
