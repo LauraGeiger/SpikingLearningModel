@@ -19,7 +19,7 @@ Adafruit_PWMServoDriver pwm1 = Adafruit_PWMServoDriver(0x40);
 #define NbrValves 12
 #define SERVO_FREQ 50
 
-int serINLET[NbrValves]  =   {230, 200, 220, 200, 205, 210, 220, 190, 230, 170, 220, 220};
+int serINLET[NbrValves]  =   {230, 200, 220, 200, 205, 210, 220, 220, 230, 170, 220, 220};
 int serOUTLET[NbrValves];
 int serHOLD[NbrValves];
 int ServoInInlet[NbrValves] = {0};

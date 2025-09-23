@@ -3,6 +3,8 @@
 //--- select ESP32 Dev Module ---//
 
 // Define Pins of MUX1 --> Reading in sensors
+// Pressure sensor 005PGAA5 4A07-04N
+// 12-bit ADC (0-4095)
 const int mux1potPin = 35;  // Analog Input "SIG"
 const int mux1outputPin = 19;  // Digital Output "EN"
 const int mux1Channels[] = {21, 22, 23, 32};  // MUX 1 control pins

@@ -19,7 +19,7 @@ data <- data %>%
   mutate(
     Iterations = as.numeric(Iterations),
     Loop = as.factor(Loop),
-    GroupNameLabel = gsub(" \\(", "\n(", GroupName),
+    GroupNameLabel = gsub(" ", "\n", GroupName),
     GroupNameOrdered = factor(GroupNameLabel, levels = unique(GroupNameLabel[order(Group)]))
   )
 
