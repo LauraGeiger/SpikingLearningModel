@@ -82,6 +82,9 @@ class MotorLearning:
         self.hold_time = 5000 # ms
         self.joint_duration_mapping = {grasp_type: {joint: self.duration_flexors for joint in self.joints} for grasp_type in self.grasp_types + ['None']}
         self.stepper_motor_low = False
+        self.flexion_threshold = 20
+        self.touch_threshold = 20
+        self.sensor_analysis_alpha = 0.8
 
         # Valve - Actuators
         #  1 - Thumb flexor
@@ -451,7 +454,7 @@ class MotorLearning:
                     print(f"Ignored malformed line: {line}")
             time.sleep(0.005)  # ~200 Hz sampling
     
-    def analyze_sensor_data_flex(self, alpha=0.8, flexion_threshold=30):
+    def analyze_sensor_data_flex(self):
         #print("self.recorded_sensor_data_flex")
         #for row in self.recorded_sensor_data_flex:
         #    print(row)
@@ -474,7 +477,7 @@ class MotorLearning:
             for sample in self.recorded_sensor_data_flex[1:]:
                 for i in range(self.num_flex_sensors):
                     # Apply low-pass filter
-                    filtered = alpha * prev_filtered[i] + (1 - alpha) * sample[i]
+                    filtered = self.sensor_analysis_alpha * prev_filtered[i] + (1 - self.sensor_analysis_alpha) * sample[i]
 
                     # Track max
                     max_filtered[i] = max(max_filtered[i], filtered)
@@ -483,7 +486,7 @@ class MotorLearning:
 
             for i, name in enumerate(self.loops[0].goals_names):
                 delta_up = max_filtered[i] - start[i]
-                if delta_up > flexion_threshold:
+                if delta_up > self.flexion_threshold:
                     flexion_detected[i] = True
                 text = f"{delta_up:.0f} {'Flex' if flexion_detected[i] else ''}"
                 self.buttons[f'sensor_flex_{name}'].set_text(text)
@@ -494,7 +497,7 @@ class MotorLearning:
         else:
             print("Not enough data from flex sensors")
 
-    def analyze_sensor_data_touch(self, alpha=0.8, touch_threshold=20):
+    def analyze_sensor_data_touch(self):
         #print("self.recorded_sensor_data_touch")
         #for row in self.recorded_sensor_data_touch:
         #    print(row)
@@ -517,7 +520,7 @@ class MotorLearning:
             for sample in self.recorded_sensor_data_touch[1:]:
                 for i in range(self.num_touch_sensors):
                     # Apply low-pass filter
-                    filtered = alpha * prev_filtered[i] + (1 - alpha) * sample[i]
+                    filtered = self.sensor_analysis_alpha * prev_filtered[i] + (1 - self.sensor_analysis_alpha) * sample[i]
 
                     # Track max and min
                     max_filtered[i] = max(max_filtered[i], filtered)
@@ -532,7 +535,7 @@ class MotorLearning:
                 self.touch_expected_max_delta_up[i] = 0.5 * self.touch_expected_max_delta_up[i] + 0.5 * self.touch_sensor_values_delta_up[i]
                 self.touch_expected_max_delta_down[i] = 0.5 * self.touch_expected_max_delta_down[i] + 0.5 * self.touch_sensor_values_delta_down[i]
 
-                text = f"{self.touch_sensor_values_delta_up[i]:.0f} {'Touch' if self.touch_sensor_values_delta_up[i] > touch_threshold else ''}"
+                text = f"{self.touch_sensor_values_delta_up[i]:.0f} {'Touch' if self.touch_sensor_values_delta_up[i] > self.touch_threshold else ''}"
                 self.buttons[f'sensor_touch_{name}'].set_text(text)
         else:
             print("Not enough data from touch sensors")
@@ -884,7 +887,10 @@ class MotorLearning:
             "hold_time": self.hold_time,
             "iteration": self.iteration,
             "start_time": self.start_time,
-            "stop_time": self.stop_time
+            "stop_time": self.stop_time,
+            "self.sensor_analysis_alpha": self.sensor_analysis_alpha,
+            "self.flexion_threshold": self.flexion_threshold,
+            "self.touch_threshold": self.touch_threshold
         }
         row = write_dict(ws_globals, "Scalars", scalars, row)
 
