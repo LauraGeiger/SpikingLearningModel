@@ -1739,7 +1739,7 @@ class BasalGangliaLoop:
         print(f"Trained weights saved to {self.trained_weights_filename}")
 
     def load_trained_weights(self):
-        filename = f"Trained_Weights_{self.name}.pkl"  
+        filename = f"PretrainedWeights\Trained_Weights_{self.name}.pkl"  
         
         with open(filename, 'rb') as f:
             state = pickle.load(f)
