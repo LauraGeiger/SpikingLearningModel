@@ -1,0 +1,3 @@
+Air pressure initially adjusted to 1.8 bar
+Thumb opposition measured at actuator
+Observed errors: Activation of wrist happened often

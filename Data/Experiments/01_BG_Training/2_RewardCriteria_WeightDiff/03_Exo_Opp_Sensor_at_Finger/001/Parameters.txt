@@ -1,0 +1,4 @@
+Successful learning criterium: avg_weight['MSNd'] - avg_weight['MSNi'] > 0.75
+Flexion_threshold = 30
+
+Finding: Learned index finger mapping incorrect

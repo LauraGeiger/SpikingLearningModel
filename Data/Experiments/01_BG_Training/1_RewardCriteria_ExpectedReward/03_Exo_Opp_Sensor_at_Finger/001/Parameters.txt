@@ -1,0 +1,2 @@
+Successful learning criterium: expected_reward > 0.5
+Flexion_threshold = 30

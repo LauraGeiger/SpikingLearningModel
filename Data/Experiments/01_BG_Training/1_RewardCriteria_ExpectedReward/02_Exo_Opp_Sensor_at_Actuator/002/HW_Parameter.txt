@@ -1,0 +1,2 @@
+Air pressure initially adjusted to 1.2 bar
+Thumb opposition measured at actuator
