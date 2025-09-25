@@ -31,6 +31,7 @@ const int MICROSTEPS = 1;                               // set by MS1-MS3 wiring
 const float LEAD_MM = 5.0;                              // ~5 mm per rev
 const int STEPS_PER_REV = MOTOR_STEPS * MICROSTEPS;     // 1 * 200 = 200
 const float STEPS_PER_MM = STEPS_PER_REV / LEAD_MM;     // 200 / 5 = 40
+static bool moving = false;                             // flag to track if motor is moving
 AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 void setup() {
@@ -46,41 +47,57 @@ void setup() {
     // Stepper motor setup
     pinMode(ENABLE_PIN, OUTPUT);
     digitalWrite(ENABLE_PIN, LOW);  // Enable driver
-    stepper.setMaxSpeed(150);       // steps/sec
-    stepper.setAcceleration(50);    // steps/sec^2
+    stepper.setMaxSpeed(4000);      // steps/sec
+    stepper.setAcceleration(500);   // steps/sec^2
 }
 
-void loop() {  
-    // Read sensor values 
-    for (int s = 0; s < mux1numSensors; s++) {
-        for (int i = 0; i < 4; i++) {
-            digitalWrite(mux1Channels[i], bitRead(s, i));
+unsigned long lastSensorSend = 0;    // timestamp of last sensor packet
+const unsigned long sensorInterval = 50; // ms → 20 Hz data rate
+
+void loop() {
+    unsigned long now = millis();
+
+    // --- Stepper motor control (always runs as fast as possible) ---
+    if (moving) {
+        stepper.run();
+        if (stepper.distanceToGo() == 0) {
+            Serial.println("M:done");
+            moving = false;
         }
-        digitalWrite(mux1outputPin, LOW);
-        delay(1);
-        sensors[s] = analogRead(mux1potPin);
-        digitalWrite(mux1outputPin, HIGH);
-        delay(1);
-        Serial.print(sensors[s], 2); // round to 2 decimals
-        if (s < numSensors-1) Serial.print(",");  // Add comma except for last value
     }
-    Serial.println();  // Newline to mark end of data packet
-    delay(100);
-    
-    // Move stepper motor
+
+    // --- Handle incoming serial commands ---
     if (Serial.available()) {
         String input = Serial.readStringUntil('\n');
-        input.trim(); // remove whitespace
+        input.trim();
         if (input.startsWith("M:")) {
-            int move_mm = input.substring(2).toInt(); // Ignore the first 2 characters "M:"
-            long targetSteps = move_mm * STEPS_PER_MM; 
+            int move_mm = input.substring(2).toInt();
+            long targetSteps = move_mm * STEPS_PER_MM;
             stepper.move(targetSteps);
-            //Serial.printf("Moving: %d mm (%ld steps)\n", move_mm, targetSteps);
-            while (stepper.distanceToGo() != 0) { 
-                stepper.run(); 
-            }
-            
+            moving = true;
         }
     }
-    //stepper.run(); 
+
+    // --- Sensor data sending (only every sensorInterval ms) ---
+    if (now - lastSensorSend >= sensorInterval) {
+        lastSensorSend = now;
+
+        char sensor_values[128];
+        int idx = 0;
+
+        for (int s = 0; s < mux1numSensors; s++) {
+            for (int i = 0; i < 4; i++) {
+                digitalWrite(mux1Channels[i], bitRead(s, i));
+            }
+            digitalWrite(mux1outputPin, LOW);
+            int val = analogRead(mux1potPin);
+            digitalWrite(mux1outputPin, HIGH);
+
+            idx += snprintf(sensor_values + idx, sizeof(sensor_values) - idx, "%d", val);
+            if (s < numSensors - 1) {
+                idx += snprintf(sensor_values + idx, sizeof(sensor_values) - idx, ",");
+            }
+        }
+        Serial.println(sensor_values);
+    }
 }
