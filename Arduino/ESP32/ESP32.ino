@@ -47,7 +47,7 @@ void setup() {
     // Stepper motor setup
     pinMode(ENABLE_PIN, OUTPUT);
     digitalWrite(ENABLE_PIN, LOW);  // Enable driver
-    stepper.setMaxSpeed(4000);      // steps/sec
+    stepper.setMaxSpeed(500);       // steps/sec
     stepper.setAcceleration(500);   // steps/sec^2
 }
 

@@ -10,6 +10,8 @@ import serial
 import json
 import sys
 import pickle
+import glob
+import os
 from openpyxl import Workbook
 from datetime import datetime
 from itertools import product
@@ -64,10 +66,14 @@ class MotorLearning:
         self.performed_action = None
         self.num_flex_sensors = 6
         self.num_touch_sensors = 5
-        self.touch_sensor_values_delta_up = [0] * self.num_touch_sensors
-        self.touch_sensor_values_delta_down = [0] * self.num_touch_sensors
-        self.touch_expected_max_delta_up = [100] * self.num_touch_sensors
-        self.touch_expected_max_delta_down = [100] * self.num_touch_sensors
+        self.flexion_threshold = 30
+        self.touch_threshold = 10
+        self.touch_overload_threshold = 100
+        self.sensor_analysis_alpha = 0.8
+        self.touch_sensor_delta_grasp = [0] * self.num_touch_sensors
+        self.touch_sensor_delta_hold = [0] * self.num_touch_sensors
+        self.touch_sensor_expected_max_delta_grasp = [self.touch_overload_threshold] * self.num_touch_sensors
+        self.touch_sensor_expected_max_delta_hold = [-self.touch_overload_threshold] * self.num_touch_sensors
         self.duration_actuators = 100 # ms
         self.duration_flexors = 2000 # ms
         self.max_duration_flexors = 6000 # ms
@@ -75,10 +81,13 @@ class MotorLearning:
         self.hold_time = 5000 # ms
         self.joint_duration_mapping = {grasp_type: {joint: self.duration_flexors for joint in self.joints} for grasp_type in self.grasp_types + ['None']}
         self.stepper_motor_low = False
-        self.flexion_threshold = 20
-        self.touch_threshold = 20
-        self.touch_overload_threshold = 200
-        self.sensor_analysis_alpha = 0.8
+
+        # Sensors
+        self.sensor_times = []        
+        self.sensor_flex_over_time = {joint_idx: [] for joint_idx in range(len(self.joints))}     
+        self.sensor_touch_grasp_over_time = {joint_idx: [] for joint_idx in range(len(self.joints)-1)}       
+        self.sensor_touch_hold_over_time = {joint_idx: [] for joint_idx in range(len(self.joints)-1)}
+        self.feedback_over_time = {'grasp': [], 'hold': []}
 
         # Valve - Actuators
         #  1 - Thumb flexor
@@ -203,6 +212,9 @@ class MotorLearning:
             self.axs_probabilities[idx].set_axis_off()
             self.axs_probabilities[idx].set_xlim(0, 1)
             self.axs_probabilities[idx].set_ylim(0, 1)
+
+            # Init User Feedback
+            self.axs_probabilities
             
             if idx == 0:
                 # Plot output group name
@@ -316,6 +328,101 @@ class MotorLearning:
     def _init_simulation(self):
         h.dt = 1
         h.finitialize()
+
+    class UserFeedback:
+        def __init__(self):
+            self.result = {"grasp": None, "hold": None}
+            self._ask()
+
+        def _ask(self):
+            fig = plt.figure(figsize=(6, 4))
+            fig.canvas.manager.set_window_title('UserFeedback')
+            gs = gridspec.GridSpec(5, 2, figure=fig)
+
+            # Question labels and result texts
+            ax_grasp_label = fig.add_subplot(gs[0, 0])
+            ax_grasp_label.axis('off')
+            ax_grasp_label.text(0, 0.5, "Object grasped?", fontsize=12, weight='bold', verticalalignment='center')
+            ax_grasp_result = fig.add_subplot(gs[0, 1])
+            ax_grasp_result.axis('off')
+            grasp_result_text = ax_grasp_result.text(0, 0.5, "-", fontsize=12, color='blue', verticalalignment='center')
+
+            ax_hold_label = fig.add_subplot(gs[2, 0])
+            ax_hold_label.axis('off')
+            ax_hold_label.text(0, 0.5, "Object held?", fontsize=12, weight='bold', verticalalignment='center')
+            ax_hold_result = fig.add_subplot(gs[2, 1])
+            ax_hold_result.axis('off')
+            hold_result_text = ax_hold_result.text(0, 0.5, "-", fontsize=12, color='blue', verticalalignment='center')
+
+            # Buttons
+            b_buttons = {}  # store button objects
+            # Grasp buttons
+            ax_grasp_yes = fig.add_subplot(gs[1, 0])
+            b_grasp_yes = Button(ax_grasp_yes, "Yes")
+            ax_grasp_no = fig.add_subplot(gs[1, 1])
+            b_grasp_no = Button(ax_grasp_no, "No")
+            b_buttons["grasp"] = {"Yes": b_grasp_yes, "No": b_grasp_no}
+
+            # Hold buttons
+            ax_hold_yes = fig.add_subplot(gs[3, 0])
+            b_hold_yes = Button(ax_hold_yes, "Yes")
+            ax_hold_no = fig.add_subplot(gs[3, 1])
+            b_hold_no = Button(ax_hold_no, "No")
+            b_buttons["hold"] = {"Yes": b_hold_yes, "No": b_hold_no}
+
+            # Confirm button
+            ax_confirm = fig.add_subplot(gs[4, :])
+            b_confirm = Button(ax_confirm, "Confirm")
+            b_confirm.eventson = False  # disabled initially
+            ax_confirm.set_visible(False)
+
+            # Helper to update confirm button
+            def update_confirm():
+                if self.result["grasp"] is not None and self.result["hold"] is not None:
+                    ax_confirm.set_visible(True)
+                    b_confirm.eventson = True
+                else:
+                    ax_confirm.set_visible(False)
+                    b_confirm.eventson = False
+                fig.canvas.draw_idle()
+
+            # General command function for Yes/No buttons
+            def command(question_key, answer):
+                self.result[question_key] = True if answer == "Yes" else False
+                # Update result text
+                if question_key == "grasp":
+                    grasp_result_text.set_text(answer)
+                else:
+                    hold_result_text.set_text(answer)
+                # Color the clicked button, reset the other
+                for a, b in b_buttons[question_key].items():
+                    if a == answer:
+                        b.color = 'green' if answer == "Yes" else 'red'
+                    else:
+                        b.color = '0.85'
+                update_confirm()
+
+            # Assign command to buttons
+            for key in ["grasp", "hold"]:
+                for ans in ["Yes", "No"]:
+                    b_buttons[key][ans].on_clicked(lambda event, k=key, a=ans: command(k, a))
+
+            # Confirm button callback
+            def confirm(event):
+                plt.close(fig)
+            
+            b_confirm.on_clicked(confirm)
+
+            plt.show(block=False)
+
+            # Wait here until popup closed
+            while plt.fignum_exists(fig.number):
+                fig.canvas.draw_idle()
+                fig.canvas.flush_events()
+                time.sleep(0.01)
+        
+        def get_result(self):
+            return self.result
 
     def toggle_pause(self, event=None):
         self.paused = not self.paused
@@ -456,6 +563,29 @@ class MotorLearning:
                 except ValueError:
                     if line != "M:done":
                         print(f"Ignored malformed line: {line}")
+
+        for key, values in self.sensor_flex_over_time.items():
+            missing_values = len(self.sensor_times) - len(values)
+            if missing_values > 0:
+                values.extend([None] * missing_values)
+
+        for key, values in self.sensor_touch_grasp_over_time.items():
+            missing_values = len(self.sensor_times) - len(values)
+            if missing_values > 0:
+                values.extend([None] * missing_values)
+        
+        for key, values in self.sensor_touch_hold_over_time.items():
+            missing_values = len(self.sensor_times) - len(values)
+            if missing_values > 0:
+                values.extend([None] * missing_values)
+
+        for key, values in self.feedback_over_time.items():
+            missing_values = len(self.sensor_times) - len(values)
+            if missing_values > 0:
+                values.extend([None] * missing_values)
+
+        if not self.sensor_times or int(h.t) != self.sensor_times[-1]:
+            self.sensor_times.append(int(h.t))
     
     def analyze_sensor_data_flex(self):
         #print("self.recorded_sensor_data_flex")
@@ -488,11 +618,13 @@ class MotorLearning:
                     prev_filtered[i] = filtered
 
             for i, name in enumerate(self.loops[0].goals_names):
-                delta_up = max_filtered[i] - start[i]
-                if delta_up > self.flexion_threshold:
+                delta = int(max_filtered[i] - start[i])
+                if delta > self.flexion_threshold:
                     flexion_detected[i] = True
-                text = f"{delta_up:.0f} {'Flex' if flexion_detected[i] else ''}"
+                text = f"{delta} {'Flex' if flexion_detected[i] else ''}"
                 self.buttons[f'sensor_flex_{name}'].set_text(text)
+
+                self.sensor_flex_over_time[i].append(delta)
             
             self.performed_action = ''.join(['1' if value else '0' for value in flexion_detected])
             self.performed_action = self.performed_action[:len(self.loops[0].actions_names)]
@@ -503,11 +635,8 @@ class MotorLearning:
         self.fig.canvas.flush_events()
         plt.pause(0.001)  # tiny pause lets GUI update
 
-    def analyze_sensor_data_touch(self):
-        #print("self.recorded_sensor_data_touch")
-        #for row in self.recorded_sensor_data_touch:
-        #    print(row)
-
+    def old_analyze_sensor_data_touch(self):
+        
         # Remove invalid data
         self.recorded_sensor_data_touch = [row for row in self.recorded_sensor_data_touch
             if len(row) == self.num_touch_sensors and all(int(val) != 0 for val in row)]
@@ -516,10 +645,17 @@ class MotorLearning:
         if self.recorded_sensor_data_touch:
             self.recorded_sensor_data_touch = self.recorded_sensor_data_touch[1:]
 
+        print("self.recorded_sensor_data_touch")
+        for row in self.recorded_sensor_data_touch:
+            print(row)
+
         if self.recorded_sensor_data_touch:
-            start = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
-            end = [self.recorded_sensor_data_touch[-1][i] for i in range(self.num_touch_sensors)]
-            prev_filtered = start.copy()
+            N = min(5, len(self.recorded_sensor_data_touch))
+            start_raw = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
+            end_raw = [self.recorded_sensor_data_touch[-1][i] for i in range(self.num_touch_sensors)]
+            start = np.median(self.recorded_sensor_data_touch[:N], axis=0).tolist()
+            end = np.median(self.recorded_sensor_data_touch[-N:], axis=0).tolist()
+            prev_filtered = [self.recorded_sensor_data_touch[0][i] for i in range(self.num_touch_sensors)]
             max_filtered = prev_filtered.copy()
             min_filtered = prev_filtered.copy()
 
@@ -535,20 +671,71 @@ class MotorLearning:
                     prev_filtered[i] = filtered
 
             for i, name in enumerate(self.loops[0].goals_names[1:]):
-                self.touch_sensor_values_delta_up[i] = max_filtered[i] - start[i]
-                self.touch_sensor_values_delta_down[i] = max_filtered[i] - end[i] 
+                self.touch_sensor_delta_grasp[i] = max_filtered[i] - start[i]
+                self.touch_sensor_delta_hold[i] = max_filtered[i] - end[i] 
                 
-                self.touch_expected_max_delta_up[i] = 0.5 * self.touch_expected_max_delta_up[i] + 0.5 * self.touch_sensor_values_delta_up[i]
-                self.touch_expected_max_delta_down[i] = 0.5 * self.touch_expected_max_delta_down[i] + 0.5 * self.touch_sensor_values_delta_down[i]
+                self.touch_sensor_expected_max_delta_grasp[i] = 0.5 * self.touch_sensor_expected_max_delta_grasp[i] + 0.5 * self.touch_sensor_delta_grasp[i]
+                self.touch_sensor_expected_max_delta_hold[i] = 0.5 * self.touch_sensor_expected_max_delta_hold[i] + 0.5 * self.touch_sensor_delta_hold[i]
 
-                text = f"{self.touch_sensor_values_delta_up[i]:.0f} "
-                if self.touch_sensor_values_delta_up[i] > self.touch_threshold:
+                text = f"{self.touch_sensor_delta_grasp[i]:.0f} "
+                if self.touch_sensor_delta_grasp[i] > self.touch_threshold:
                     text += 'Touch'
-                elif self.touch_sensor_values_delta_up[i] > self.touch_overload_threshold:
+                elif self.touch_sensor_delta_grasp[i] > self.touch_overload_threshold:
                     text += 'Overload'
                 self.buttons[f'sensor_touch_{name}'].set_text(text)
-                text = f"{self.touch_sensor_values_delta_down[i]:.0f} {'Drop' if self.touch_sensor_values_delta_down[i] > self.touch_threshold else ''}"
+                text = f"{self.touch_sensor_delta_hold[i]:.0f} {'Drop' if self.touch_sensor_delta_hold[i] > self.touch_threshold else ''}"
                 self.buttons[f'sensor_drop_{name}'].set_text(text)
+
+                print(f"{name}: start_raw={int(start_raw[i])} start={int(start[i])} max={int(max_filtered[i])} min={int(min_filtered[i])} end_raw={int(end_raw[i])} end={int(end[i])} prev_filtered={int(prev_filtered[i])}")
+        else:
+            print("Not enough data from touch sensors")
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
+        plt.pause(0.001)  # tiny pause lets GUI update
+
+    def analyze_sensor_data_touch(self, grasp=False, hold=False):
+        
+        # Remove invalid data
+        self.recorded_sensor_data_touch = [row for row in self.recorded_sensor_data_touch
+            if len(row) == self.num_touch_sensors and all(int(val) != 0 for val in row)]
+        
+        #print("self.recorded_sensor_data_touch")
+        #for row in self.recorded_sensor_data_touch:
+        #    print(row)
+
+        if self.recorded_sensor_data_touch:
+            N = min(5, len(self.recorded_sensor_data_touch))
+            start = np.median(self.recorded_sensor_data_touch[:N], axis=0).tolist()
+            end = np.median(self.recorded_sensor_data_touch[-N:], axis=0).tolist()
+
+            for i, name in enumerate(self.loops[0].goals_names[1:]):
+                delta = int(end[i] - start[i])
+                text = f"{delta} "
+                if grasp:
+                    self.touch_sensor_delta_grasp[i] = delta
+                    self.touch_sensor_expected_max_delta_grasp[i] = 0.5 * self.touch_sensor_expected_max_delta_grasp[i] + 0.5 * self.touch_sensor_delta_grasp[i]
+
+                    if self.touch_sensor_delta_grasp[i] >= self.touch_threshold:
+                        text += 'Grasp'
+                    elif self.touch_sensor_delta_grasp[i] >= self.touch_overload_threshold:
+                        text += 'Overload'
+                    self.buttons[f'sensor_touch_{name}'].set_text(text)
+
+                    self.sensor_touch_grasp_over_time[i].append(delta)
+
+                if hold:
+                    self.touch_sensor_delta_hold[i] = delta
+                    self.touch_sensor_expected_max_delta_hold[i] = 0.5 * self.touch_sensor_expected_max_delta_hold[i] + 0.5 * self.touch_sensor_delta_hold[i]
+
+                    if self.touch_sensor_delta_hold[i] <= - self.touch_threshold:
+                        text += 'Drop' 
+                    else:
+                        text += 'Hold' 
+                    self.buttons[f'sensor_drop_{name}'].set_text(text)
+
+                    self.sensor_touch_hold_over_time[i].append(delta)
+
+                #print(f"{name}: start={int(start[i])} end={int(end[i])}")
         else:
             print("Not enough data from touch sensors")
         self.fig.canvas.draw_idle()
@@ -705,23 +892,6 @@ class MotorLearning:
         if loop.single_goal:
             if self.buttons.get(f'probability_{name}'):
                 self.buttons[f'probability_{name}'].set_text(f'{probability:.1%}')
-        #else:
-            #goal_idx = loop.goals_names.index(name)
-
-            #total = 0
-            #count = 0
-            #for key in loop.expected_reward_over_time:
-            #    if key[goal_idx] == '1':
-            #        try:
-            #            total += loop.expected_reward_over_time[key][-1]
-            #            count += 1
-            #        except IndexError:
-            #            pass  # Skip if data is missing
-
-            #if count > 0:
-            #    avg_prob = total / count
-            #    if self.buttons.get(f'probability_{name}'):
-            #        self.buttons[f'probability_{name}'].set_text(f'{avg_prob:.1%}')
     
     def generate_action_command(self):
         action = self.loops[0].selected_action[0]  
@@ -769,7 +939,7 @@ class MotorLearning:
         
         return action_command, max_duration
 
-    def move_object(self, down=True, length=20, blocking=False, timeout=10):
+    def move_object(self, down=True, length=40, blocking=False, timeout=10):
         dir = -1 if down else 1
         stepper_motor_command = f'M:{dir*length}'
         self.ser_sensor.write(stepper_motor_command.encode())
@@ -812,19 +982,27 @@ class MotorLearning:
             # Read sensor data during grasping
             self.read_sensor_data(duration=max_duration)
             if self.recorded_sensor_data_flex: self.analyze_sensor_data_flex()
-
+            
             if grasping:
+                if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch(grasp=True)
+
                 self.move_object(down=True)
 
                 # Read sensor data during holding
-                self.read_sensor_data(duration=self.hold_time, reset=False)          
-                if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch()
-
-            if grasping and self.stepper_motor_low == True:
-                self.move_object(down=False, blocking=True)
+                self.read_sensor_data(duration=self.hold_time)          
+                if self.recorded_sensor_data_touch: self.analyze_sensor_data_touch(hold=True)
+            else:
+                time.sleep(1)
             
             # Send relax command
             self.ser_exo.write('Stop\n'.encode())
+
+            if grasping and self.stepper_motor_low == True:
+                result = self.UserFeedback().get_result()
+                self.feedback_over_time['grasp'].append(int(result['grasp']))
+                self.feedback_over_time['hold'].append(int(result['hold']))
+                
+                self.move_object(down=False, blocking=True)
     
     def update_joint_duration_mapping(self, time_correction):
         grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
@@ -945,6 +1123,34 @@ class MotorLearning:
 
             ws_list.append(ws)
 
+        # Worksheets
+        data_list = [
+            ("sensor_flex_over_time", self.sensor_flex_over_time), 
+            ("sensor_touch_grasp_over_time", self.sensor_touch_grasp_over_time),
+            ("sensor_touch_hold_over_time", self.sensor_touch_hold_over_time),
+            ("feedback_over_time", self.feedback_over_time)
+            ]
+        ws_list = []
+        for name, data in data_list:
+            ws = wb.create_sheet(title=f"{name}")
+            
+            # Header
+            header = ['time']
+            keys = sorted(data.keys())
+            header.extend(f"{key}" for key in keys)
+            ws.append(header)
+
+            # Rows
+            max_len = len(self.sensor_times)
+            for t_idx in range(max_len):
+                row = [self.sensor_times[t_idx]]
+                for key in keys:
+                    val = data[key][t_idx] if t_idx < len(data[key]) else None
+                    row.append(val)
+                ws.append(row)
+
+            ws_list.append(ws)
+
         # Save
         wb.save(f"{path_extented}.xlsx") # Excel
         print(path_extented)
@@ -986,14 +1192,13 @@ class MotorLearning:
                             loop.fig.canvas.flush_events()
                         self.cerebellum.fig.canvas.draw_idle()
                         self.cerebellum.fig.canvas.flush_events()
-                        #self.update_GUI_goals_actions()
+                        self.update_GUI_goals_actions()
                         continue
                 
                 start_time = time.time()
-                
-                #grasping = True 
-                grasping = True if all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops) and all(not loop.training for loop in self.loops) else False
-                cerebellum_active = True if self.cerebellum_required and grasping else False
+
+                training_mode = any(loop.training for loop in self.loops)
+                action_selection_completed = all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops)
                 
                 for idx, loop in enumerate(self.loops):
                     
@@ -1032,32 +1237,33 @@ class MotorLearning:
                     loop.select_action()
 
                 # Cerebellum update input
-                if cerebellum_active:
+                if self.cerebellum_required and not training_mode:
                     desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
                     desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
                     desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
                     #desired_grasp_type = '001' ########################
                     #desired_joints = '0110' ########################
                     #desired_actuators = '0110' ########################
-                    norm_touch_delta_up = [min(1.0, delta_up / max_delta_up) for delta_up, max_delta_up in zip(self.touch_sensor_values_delta_up, self.touch_expected_max_delta_up)]
-                    norm_touch_delta_down = [min(1.0, delta_down / max_delta_down) for delta_down, max_delta_down in zip(self.touch_sensor_values_delta_down, self.touch_expected_max_delta_down)]
-                    self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, norm_touch_delta_up, norm_touch_delta_down)
+                    norm_touch_delta_grasp = [min(1.0, delta_grasp / max_delta_grasp) for delta_grasp, max_delta_grasp in zip(self.touch_sensor_delta_grasp, self.touch_sensor_expected_max_delta_grasp)]
+                    norm_touch_delta_hold = [min(1.0, delta_hold / max_delta_hold) for delta_hold, max_delta_hold in zip(self.touch_sensor_delta_hold, self.touch_sensor_expected_max_delta_hold)]
+                    self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, norm_touch_delta_grasp, norm_touch_delta_hold)
 
                 self.update_GUI_goals_actions()
 
                 if self.hw_connected:
-                    self.perform_action(grasping)
+                    grasping = True if not training_mode and action_selection_completed else False
+                    self.perform_action(grasping=grasping)
                 else:
-                    self.touch_sensor_values_delta_up = self.cerebellum.touch_sensor_values_delta_up
-                    self.touch_sensor_values_delta_down = self.cerebellum.touch_sensor_values_delta_down
+                    self.touch_sensor_delta_grasp = self.cerebellum.touch_sensor_delta_grasp
+                    self.touch_sensor_delta_hold = self.cerebellum.touch_sensor_delta_hold
                 
                 # --- Reward update ---# 
                 for loop in self.loops:
                     loop.determine_reward(current_time=h.t, hw_connected=self.hw_connected, performed_action=self.performed_action)
 
                 # Cerebellum trigger teaching signal (IO)
-                if cerebellum_active:
-                    self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints, action_selection_completed=True, touch_sensor_values_delta_up=self.touch_sensor_values_delta_up, touch_sensor_values_delta_down=self.touch_sensor_values_delta_down) 
+                if self.cerebellum_required and not training_mode:
+                    self.cerebellum.update_teaching_stimuli(current_time=h.t, desired_joints=desired_joints, action_selection_completed=action_selection_completed, touch_sensor_delta_grasp=self.touch_sensor_delta_grasp, touch_sensor_delta_hold=self.touch_sensor_delta_hold) 
 
                 self.update_GUI_performed_action_reward()
 
@@ -1067,7 +1273,7 @@ class MotorLearning:
                     loop.update_plots(current_time=h.t)
 
                 # Cerebellum update weights and plot
-                if cerebellum_active:
+                if self.cerebellum_required and not training_mode:
                     self.cerebellum.update_weights(current_time=h.t)
                     self.cerebellum.update_plots(current_time=h.t)
                     self.cerebellum.calculate_correction(current_time=h.t)
@@ -1215,6 +1421,7 @@ class BasalGangliaLoop:
         self.reward_over_time = {}
         self.dopamine_over_time = {}
         self.weight_cell_types = ['MSNd', 'MSNi']
+        self.pretrained_weights_filename = None
         self.trained_weights_filename = None
         self.weight_times = []
         self.weights_over_time = {(ct, action_id, msn_id, goal_id, cor_id): [] 
@@ -1317,26 +1524,7 @@ class BasalGangliaLoop:
                                     self.cor_nc_index_map[label][key] = index
                                 index += 1
             else:
-                for action_id, action in enumerate(self.actions):
-                    '''
-                    pre_cells = self.cells[pre_group][action_id]
-                    post_cells = self.cells[post_group][action_id]
-                    if len(pre_cells) > len(post_cells):
-                        pre_cells = random.sample(pre_cells, len(post_cells))
-                    elif len(post_cells) > len(pre_cells):
-                        post_cells = random.sample(post_cells, len(pre_cells))
-                    for pre_cell, post_cell in zip(pre_cells, post_cells):
-                        syn = h.ExpSyn(post_cell(0.5))
-                        syn.e = e_rev
-                        syn.tau = tau
-                        nc = h.NetCon(pre_cell(0.5)._ref_v, syn, sec=pre_cell)
-
-                        nc.weight[0] = weight
-                        nc.delay = delay
-                        self.syns[label].append(syn)
-                        self.ncs[label].append(nc)
-                    '''
-                    
+                for action_id, action in enumerate(self.actions):                    
                     for pre_cell in self.cells[pre_group][action_id]:
                         for post_cell in self.cells[post_group][action_id]:
                             syn = h.ExpSyn(post_cell(0.5))
@@ -1731,7 +1919,6 @@ class BasalGangliaLoop:
                 for ct in self.weight_cell_types:
                     for msn_id in range(self.cell_types_numbers[ct][1]):
                         delta_w = 0
-                        #delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[selected_goal][-1]
                         if ct == 'MSNd':
                             delta_w = self.learning_rate * (self.rates_rel[ct][action_id][msn_id] - 1) * self.dopamine_over_time[selected_goal][-1]
                             delta_w = delta_w
@@ -1768,8 +1955,15 @@ class BasalGangliaLoop:
         print(f"Trained weights saved to {self.trained_weights_filename}")
 
     def load_trained_weights(self):
-        filename = f"PretrainedWeights\Trained_Weights_{self.name}.pkl"  
+        pattern = f"PretrainedWeights/*_Trained_Weights_{self.name}.pkl"
+        matches = glob.glob(pattern)
+        #filename = f"PretrainedWeights\Trained_Weights_{self.name}.pkl"  
         
+        if matches:
+            filename = matches[0]  # first match
+        else:
+            raise FileNotFoundError(f"No pretrained weights found for {self.name}")
+
         with open(filename, 'rb') as f:
             state = pickle.load(f)
 
@@ -1785,7 +1979,7 @@ class BasalGangliaLoop:
         
         # Load learned goal-action map
         self.learned_goal_action_map = state['learned_goal_action_map']
-
+        self.pretrained_weights_filename = filename
         print(f"Cortical weights loaded from {filename}")
 
     def update_plots(self, current_time, goal=None, action=None):
@@ -1912,6 +2106,7 @@ class BasalGangliaLoop:
             "expected_reward_value": self.expected_reward_value,
             "training_start_iteration": self.training_start_iteration,
             "training_stop_iteration": self.training_stop_iteration,
+            "pretrained_weights_filename": self.pretrained_weights_filename,
             "trained_weights_filename": self.trained_weights_filename
         }
         row = write_dict(ws_globals, "Scalars", scalars, row)
@@ -1979,8 +2174,8 @@ class Cerebellum:
         self.grasp_types = grasp_types
         self.joints = joints
         self.actuators = actuators
-        self.touch_sensor_values_delta_up = [50] * N_pressure
-        self.touch_sensor_values_delta_down = [10] * N_pressure
+        self.touch_sensor_delta_grasp = [0] * N_pressure
+        self.touch_sensor_delta_hold = [0] * N_pressure
 
         self.touch_threshold = touch_threshold
         self.touch_overload_threshold = touch_overload_threshold
@@ -1991,7 +2186,7 @@ class Cerebellum:
         self.STDP_center = -100.0
         self.STDP_sigma = 30.0
 
-        self.num_pontine = len(self.grasp_types) + len(self.joints) + len(self.actuators) + len(self.touch_sensor_values_delta_up) + len(self.touch_sensor_values_delta_down)
+        self.num_pontine = len(self.grasp_types) + len(self.joints) + len(self.actuators) + len(self.touch_sensor_delta_grasp) + len(self.touch_sensor_delta_hold)
         self.num_granule = 3 * self.num_pontine
         self.num_deep_cerebellar = 2 # 1 for positive correction, 1 for negative correction
         self.num_purkinje = 4* self.num_deep_cerebellar
@@ -2453,10 +2648,10 @@ class Cerebellum:
             return
         
         if dir == 'pos':
-            self.touch_sensor_values_delta_up[finger_idx] = 10 if val else 50
-            self.touch_sensor_values_delta_down[finger_idx] = 50 if val else 10
+            self.touch_sensor_delta_grasp[finger_idx] = 0 if val else self.touch_threshold
+            self.touch_sensor_delta_hold[finger_idx] = - self.touch_threshold if val else 0
         elif dir == 'neg':
-            self.touch_sensor_values_delta_up[finger_idx] = 210 if val else 50
+            self.touch_sensor_delta_grasp[finger_idx] = self.touch_overload_threshold if val else self.touch_threshold
 
     def update_stimulus_activation(self, ct, input=None):
         for k, _ in enumerate(self.ncs[ct]):
@@ -2467,13 +2662,13 @@ class Cerebellum:
                 stim = self.ncs[ct][k].pre()
                 stim.interval = interval / val
                 
-    def update_input_stimuli(self, desired_grasp_type, desired_joints, desired_actuators, norm_touch_delta_up=None, norm_touch_delta_down=None):
+    def update_input_stimuli(self, desired_grasp_type, desired_joints, desired_actuators, norm_touch_delta_grasp=None, norm_touch_delta_hold=None):
         input = []
         input.extend([int(ch) for ch in desired_grasp_type])
         input.extend([int(ch) for ch in desired_joints])
         input.extend([int(ch) for ch in desired_actuators])
-        if norm_touch_delta_up: input.extend(norm_touch_delta_up)
-        if norm_touch_delta_down: input.extend(norm_touch_delta_down)
+        if norm_touch_delta_grasp: input.extend(norm_touch_delta_grasp)
+        if norm_touch_delta_hold: input.extend(norm_touch_delta_hold)
 
         # Update PN stimuli
         relative_baseline = 0.4
@@ -2486,49 +2681,48 @@ class Cerebellum:
             self.buttons[name].set_val(value)
             self._is_updating_programmatically = False
 
-    def update_teaching_stimuli(self, current_time, desired_joints, action_selection_completed=True, touch_sensor_values_delta_up=None, touch_sensor_values_delta_down=None):
+    def update_teaching_stimuli(self, current_time, desired_joints, action_selection_completed=True, touch_sensor_delta_grasp=None, touch_sensor_delta_hold=None):
         self.error_times.append(current_time)
-        if touch_sensor_values_delta_up: self.touch_sensor_values_delta_up = touch_sensor_values_delta_up
-        if touch_sensor_values_delta_down: self.touch_sensor_values_delta_down = touch_sensor_values_delta_down
+        if touch_sensor_delta_grasp: self.touch_sensor_delta_grasp = touch_sensor_delta_grasp
+        if touch_sensor_delta_hold: self.touch_sensor_delta_hold = touch_sensor_delta_hold
 
         joint_to_finger_mapping = [0] + [i for i in range(len(self.joints) - 1)] # 2 joints for thumb
         teaching_input = [0] * self.total_cell_numbers['IO']
         
         for j_idx, desired_joint in enumerate(desired_joints):
-            finger_idx = joint_to_finger_mapping[j_idx]
-            desired_joint = int(desired_joint)
-
-            touch_on = self.touch_sensor_values_delta_up[finger_idx]
-            touch_off = self.touch_sensor_values_delta_down[finger_idx]
-
             error_dir = 0
+            if action_selection_completed:
+                finger_idx = joint_to_finger_mapping[j_idx]
+                desired_joint = int(desired_joint)
 
-            # Check mismatches
-            if desired_joint == 1:
-                if (touch_on < self.touch_threshold or touch_off > self.touch_threshold):
-                    # wanted to grip but failed / released early
-                    error_dir = 1 # need positive correction
-                elif touch_on > self.touch_overload_threshold:
-                    # too much pressure applied
-                    error_dir = -1 # need negative correction
-            
-            err_pos_name = f"err_pos{finger_idx}"
-            err_neg_name = f"err_neg{finger_idx}"
-            if error_dir == 1:  # positive correction
-                teaching_input[2 * j_idx] = 1
-                if action_selection_completed:
+                touch_grasp = self.touch_sensor_delta_grasp[finger_idx]
+                touch_hold = self.touch_sensor_delta_hold[finger_idx]
+
+                # Check mismatches
+                if desired_joint == 1:
+                    if (touch_grasp < self.touch_threshold or touch_hold <= -self.touch_threshold):
+                        # wanted to grip but failed / released early
+                        error_dir = 1 # need positive correction
+                    elif touch_grasp >= self.touch_overload_threshold:
+                        # too much pressure applied
+                        error_dir = -1 # need negative correction
+                
+                err_pos_name = f"err_pos{finger_idx}"
+                err_neg_name = f"err_neg{finger_idx}"
+                if error_dir == 1:  # positive correction
+                    teaching_input[2 * j_idx] = 1
                     self.set_err_button(err_pos_name, 1)
                     self.set_err_button(err_neg_name, 0)
-            elif error_dir == -1:  # negative correction
-                teaching_input[2 * j_idx + 1] = 1
-                if action_selection_completed:
+                elif error_dir == -1:  # negative correction
+                    teaching_input[2 * j_idx + 1] = 1
                     self.set_err_button(err_pos_name, 0)
                     self.set_err_button(err_neg_name, 1)
-            else:  # neutral
-                if action_selection_completed:
+                else:  # neutral
                     self.set_err_button(err_pos_name, 0)
                     self.set_err_button(err_neg_name, 0)
-            self.error_over_time[j_idx].append(error_dir)
+                self.error_over_time[j_idx].append(error_dir)
+            else:
+                self.error_over_time[j_idx].append(error_dir)
             
         # Update IO stimuli
         self.update_stimulus_activation(ct='IO', input=teaching_input)
@@ -2549,7 +2743,7 @@ class Cerebellum:
         """
         return self.STDP_A_pos - self.STDP_A_neg * np.exp(-((delta_t - self.STDP_center) ** 2) / (2 * self.STDP_sigma ** 2))
     
-    def update_weights(self, current_time):
+    def update_weights(self, current_time, action_selection_completed=True):
         self.weight_times.append(int(current_time))
 
         # --- Previous GC spikes for plasticity ---
@@ -2577,34 +2771,35 @@ class Cerebellum:
 
                 delta_w = 0.0
 
-                # Loop over all IO neurons
-                for pop in range(self.cell_types_numbers['IO'][0]):
-                    for io_id in range(self.cell_types_numbers['IO'][1]):
-                        io_times = io_spikes.get((pop, io_id), [])  # empty if no spikes
+                if action_selection_completed:
+                    # Loop over all IO neurons
+                    for pop in range(self.cell_types_numbers['IO'][0]):
+                        for io_id in range(self.cell_types_numbers['IO'][1]):
+                            io_times = io_spikes.get((pop, io_id), [])  # empty if no spikes
 
-                        # Assign IO population to correct PC range
-                        pc_start = pop * self.cell_types_numbers['PC'][1]
-                        pc_end   = (pop + 1) * self.cell_types_numbers['PC'][1]
-                        pc_half  = self.cell_types_numbers['PC'][1] // 2
-                        io_half  = self.cell_types_numbers['IO'][1] // 2
+                            # Assign IO population to correct PC range
+                            pc_start = pop * self.cell_types_numbers['PC'][1]
+                            pc_end   = (pop + 1) * self.cell_types_numbers['PC'][1]
+                            pc_half  = self.cell_types_numbers['PC'][1] // 2
+                            io_half  = self.cell_types_numbers['IO'][1] // 2
 
-                        if io_id < io_half:
-                            pc_range = range(pc_start, pc_start + pc_half)
-                        else:
-                            pc_range = range(pc_start + pc_half, pc_end)
+                            if io_id < io_half:
+                                pc_range = range(pc_start, pc_start + pc_half)
+                            else:
+                                pc_range = range(pc_start + pc_half, pc_end)
 
-                        if pc_id not in pc_range:
-                            continue  # skip irrelevant IO–PC pairs
+                            if pc_id not in pc_range:
+                                continue  # skip irrelevant IO–PC pairs
 
-                        # Apply kernel for all GC spikes from previous interval
-                        for gc_t in gc_spikes_prev.get(gc_id, []):
-                            if io_times:  # IO fired → compute real dt
-                                for io_t in io_times:
-                                    dt = gc_t - io_t
+                            # Apply kernel for all GC spikes from previous interval
+                            for gc_t in gc_spikes_prev.get(gc_id, []):
+                                if io_times:  # IO fired → compute real dt
+                                    for io_t in io_times:
+                                        dt = gc_t - io_t
+                                        delta_w += self.STDP_kernel(dt)
+                                else:  # No IO spikes → baseline LTP
+                                    dt = np.inf
                                     delta_w += self.STDP_kernel(dt)
-                            else:  # No IO spikes → baseline LTP
-                                dt = np.inf
-                                delta_w += self.STDP_kernel(dt)
 
                 # Clamp and apply weight
                 new_weight = max(self.min_weight, min(self.max_weight, last_weight + delta_w))
