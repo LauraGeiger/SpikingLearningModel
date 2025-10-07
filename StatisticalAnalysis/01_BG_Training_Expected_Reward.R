@@ -5,7 +5,7 @@ library(ggplot2)
 library(purrr)
 
 # Base path containing experiment folders
-base_path <- "../Data/Experiments/01_BG_Training/01_SIM/"
+base_path <- "../Data/Experiments/01_BG_Training/1_RewardCriteria_ExpectedReward/01_SIM/"
 
 # List all experiment subfolders (e.g., "001", "002", ...)
 exp_folders <- list.dirs(base_path, full.names = TRUE, recursive = FALSE)

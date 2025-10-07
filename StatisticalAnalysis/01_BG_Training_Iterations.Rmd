@@ -1,0 +1,86 @@
+---
+title: "BG Training Iterations"
+output: html_notebook
+---
+
+```{r}
+install.packages("tidyverse")
+install.packages("readxl")
+install.packages("ggplot2")
+remove.packages("rlang")
+install.packages("rlang")
+install.packages("ggstatsplot")
+```
+
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(ggstatsplot)
+library(patchwork)
+```
+
+```{r}
+data <- read_excel("../Data/Experiments/01_BG_Training/01_Exp_BG_Training_Iterations.xlsx")
+
+data <- data %>%
+  mutate(
+    Iterations = as.numeric(Iterations),
+    StopIteration = as.numeric(StopIteration),
+    Loop = as.factor(Loop),
+    GroupNameLabel = gsub(" ", "\n", GroupName),
+    GroupNameOrdered = factor(GroupNameLabel, levels = unique(GroupNameLabel[order(Group)]))
+  )
+
+```
+
+
+```{r}
+# Plot for each RewardCriteria
+reward_criteria_list <- unique(data$RewardCriteria)
+
+for (reward in reward_criteria_list) {
+  # Compute mean per group
+  mean_data <- data %>%
+    filter(RewardCriteria == reward) %>%
+    group_by(GroupName, FlexionThreshold, Loop) %>%
+    summarise(mean_iterations = mean(Iterations), n_points = n(), .groups = "drop") %>%
+    mutate(GroupLabel = paste0(GroupName, "\n(n=", n_points, ")"),
+           GroupLabel = ifelse(!is.na(FlexionThreshold),
+                               paste0(GroupLabel, "\n(t=", FlexionThreshold, ")"),
+                               GroupLabel))
+  
+  p <- data %>%
+    filter(RewardCriteria == reward) %>%
+    
+    group_by(GroupName, FlexionThreshold, Loop) %>%
+    mutate(n_points = n()) %>%
+    ungroup() %>%
+    mutate(GroupLabel = paste0(GroupName, "\n(n=", n_points, ")")) %>%
+    mutate(GroupLabel = ifelse(!is.na(FlexionThreshold),
+                               paste0(GroupLabel, "\n(t=", FlexionThreshold, ")"),
+                               GroupLabel)) %>%
+    ggplot(aes(x = GroupLabel, y = Iterations)) +
+    geom_violin(alpha = 0.5, color = "black") +  # Violin plot
+    geom_jitter(aes(color = GroupName), width = 0.1) +
+    geom_boxplot(width = 0.1, color = "black", alpha = 0.7, outlier.shape = NA) + # Boxplot
+    geom_point(data = mean_data, aes(x = GroupLabel, y = mean_iterations),
+               color = "darkred", size = 3, shape = 16) +
+    geom_label(data = mean_data,
+               aes(x = GroupLabel, y = mean_iterations, label = paste0("mean = ", round(mean_iterations, 1))),
+               fill = "white", color = "black", label.r = unit(0.15, "lines"),
+               size = 3, label.padding = unit(0.05, "lines"), hjust = 0, nudge_x = 0.1) +
+    facet_wrap(~Loop, scales = "free_y") +  # Split by Loop
+    theme_minimal() +
+    scale_x_discrete(expand = expansion(mult = c(0, 0.4))) +
+    labs(
+      x = NULL,
+      y = "Iterations"
+    ) +
+    theme(legend.position = "none")  # Hide legend since GroupName is on x-axis
+
+  print(p)
+}
+```
+

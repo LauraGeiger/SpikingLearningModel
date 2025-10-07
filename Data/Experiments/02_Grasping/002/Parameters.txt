@@ -1,0 +1,4 @@
+Object: 2.5cm * 2.5cm Quader
+Weight: empty
+Grasping Type: Lateral Pinch
+Air pressure: 1.5 bar

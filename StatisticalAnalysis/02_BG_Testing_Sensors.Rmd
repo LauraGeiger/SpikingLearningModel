@@ -1,0 +1,251 @@
+---
+title: "BG Testing Performance"
+output: html_notebook
+---
+
+```{r}
+install.packages("tidyverse")
+install.packages("readxl")
+install.packages("ggplot2")
+remove.packages("rlang")
+install.packages("rlang")
+install.packages("ggstatsplot")
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(ggstatsplot)
+library(patchwork)
+library(readxl)
+library(dplyr)
+library(purrr)
+library(stringr)
+
+# Experiment numbers
+exp_numbers <- sprintf("%03d", 22:27)
+sheet_names_motorlearning <- c("sensor_flex_over_time", "sensor_touch_grasp_over_time", "sensor_touch_hold_over_time")
+sheet_names_motorloop <- c("reward_over_time")
+
+# Base folder path
+base_path <- "../Data/Experiments/02_Grasping"
+
+# Function to safely load one experiment
+load_motorloop_data <- function(exp_num, sheets) {
+  exp_path <- file.path(base_path, exp_num)
+  file <- list.files(exp_path, pattern = "MotorLoop\\.xlsx$", full.names = TRUE)[1]
+  
+  if (length(file) == 0) {
+    warning(paste("No MotorLoop.xlsx found for experiment", exp_num))
+    return(NULL)
+  }
+  
+  # Dynamically read all sheets
+  exp_data <- map(sheets, ~ read_excel(file, sheet = .x) %>% mutate(iteration = time / 100))
+  names(exp_data) <- sheets
+  exp_data
+}
+
+# Function to safely load one experiment
+load_motorlearning_data <- function(exp_num, sheets) {
+  exp_path <- file.path(base_path, exp_num)
+  file <- list.files(exp_path, pattern = "MotorLearning\\.xlsx$", full.names = TRUE)[1]
+  
+  if (length(file) == 0) {
+    warning(paste("No MotorLearning.xlsx found for experiment", exp_num))
+    return(NULL)
+  }
+  
+  # Dynamically read all sheets
+  exp_data <- map(sheets, ~ read_excel(file, sheet = .x) %>% mutate(iteration = time / 100))
+  names(exp_data) <- sheets
+  exp_data
+}
+
+# Load all experiments into a named list
+motorlearning_data <- set_names(map(exp_numbers, ~ load_motorlearning_data(.x, sheet_names_motorlearning)), exp_numbers)
+motorloop_data <- set_names(map(exp_numbers, ~ load_motorloop_data(.x, sheet_names_motorloop)), exp_numbers)
+
+# Add goal to each experiment
+motorlearning_data <- map2(motorlearning_data, motorloop_data, function(learning_exp, loop_exp) {
+  if (is.null(loop_exp)) return(learning_exp)  # keep original if no motorloop data
+  df <- loop_exp$reward_over_time
+  goal_col <- names(df)[
+    sapply(df, function(x) any(x == 1)) & !(names(df) %in% c("time", "iteration"))
+  ]
+  
+  learning_exp$goal <- goal_col
+  learning_exp
+})
+
+# --- Helper function: extract data from one sheet ---
+extract_sheet_data <- function(motorlearning_data, sheet_name) {
+  map_dfr(names(motorlearning_data), function(exp_num) {
+    exp <- motorlearning_data[[exp_num]]
+    df <- exp[[sheet_name]]
+    if (is.null(df)) return(NULL)
+   
+    df %>%
+      mutate(
+        experiment = exp_num,
+        sheet = sheet_name,
+        goal = exp$goal
+      )
+  })
+}
+
+# --- Combine all sheets into one tidy dataframe ---
+all_data <- map_dfr(sheet_names_motorlearning, function(sheet) {
+  extract_sheet_data(motorlearning_data, sheet)
+})
+all_data <- all_data %>%
+  mutate(
+    sheet_clean = sheet %>%
+      str_remove("_over_time$") %>%        # remove "_over_time"
+      str_replace_all("_", " ") %>%        # replace underscores with spaces
+      str_to_title(), 
+    sheet_clean = factor(sheet_clean,      # convert to factor
+                         levels = sheet_names_motorlearning %>% 
+                           str_remove("_over_time$") %>%
+                           str_replace_all("_", " ") %>%
+                           str_to_title())
+  )
+
+# Convert all sensor columns into long format
+all_data_long <- all_data %>%
+  pivot_longer(
+    cols = c("0","1","2","3"),  # all sensor columns
+    names_to = "sensor",        # new column for sensor name
+    values_to = "value"         # new column for sensor value
+  )
+
+```
+
+
+```{r}
+flex_data_long <- all_data_long %>%
+  filter(sheet_clean == "Sensor Flex") %>%
+  group_by(goal) %>%
+  mutate(
+    experiment_label = paste0("#", dense_rank(as.numeric(experiment)))
+  ) %>%
+  ungroup() %>% 
+  mutate(
+    sensor = factor(sensor,
+      levels = sort(unique(sensor)),
+      labels = c(
+        "Thumb Opposition",
+        "Thumb Flexion",
+        "Index Finger Flexion",
+        "Middle Finger Flexion"
+      )
+    )
+  )
+
+ggplot(flex_data_long, aes(x = iteration, y = value, color = sensor, group = sensor)) +
+  geom_line(size = 1, alpha = 0.7) +
+  geom_hline(yintercept = 30, linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(experiment_label ~ goal, scales = "fixed") +
+  labs(
+    x = "Iteration",
+    y = "Value during Grasping",
+    color = "Flex Sensor"
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(all_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text.y.right = element_text(angle = 0),
+    axis.text.x = element_text(hjust = 1),
+    legend.position = "right"
+  )
+
+```
+
+```{r}
+touch_data_grasp_long <- all_data_long %>%
+  filter(sheet_clean == "Sensor Touch Grasp") %>%
+  filter(sensor != "3") %>% # Remove rows where sensor == 3
+  group_by(goal) %>%
+  mutate(
+    experiment_label = paste0("#", dense_rank(as.numeric(experiment)))
+  ) %>%
+  ungroup() %>% 
+  mutate(
+    facet_label = goal,
+    sensor = factor(sensor,
+      levels = sort(unique(sensor)),
+      labels = c(
+        "Thumb",
+        "Index Finger",
+        "Middle Finger"
+      )
+    )
+  )
+
+ggplot(touch_data_grasp_long, aes(x = iteration, y = value, color = sensor, group = sensor)) +
+  geom_line(size = 1, alpha = 0.7) +
+  geom_hline(yintercept = 8, linetype = "dashed", color = "black", size = 0.8) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(experiment_label ~ goal, scales = "fixed") +
+  labs(
+    x = "Iteration",
+    y = "Value during Grasping",
+    color = "Touch Sensor"
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(all_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text.y.right = element_text(angle = 0),
+    axis.text.x = element_text(hjust = 1),
+    legend.position = "right"
+  )
+
+```
+```{r}
+touch_data_hold_long <- all_data_long %>%
+  filter(sheet_clean == "Sensor Touch Hold") %>%
+  filter(sensor != "3") %>% # Remove rows where sensor == 3
+  group_by(goal) %>%
+  mutate(
+    experiment_label = paste0("#", dense_rank(as.numeric(experiment)))
+  ) %>%
+  ungroup() %>% 
+  mutate(
+    facet_label = goal,
+    sensor = factor(sensor,
+      levels = sort(unique(sensor)),
+      labels = c(
+        "Thumb",
+        "Index Finger",
+        "Middle Finger"
+      )
+    )
+  )
+
+ggplot(touch_data_hold_long, aes(x = iteration, y = value, color = sensor, group = sensor)) +
+  geom_line(size = 1, alpha = 0.7) +
+  geom_hline(yintercept = -5, linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(experiment_label ~ goal, scales = "fixed") +
+  labs(
+    x = "Iteration",
+    y = "Value during Holding",
+    color = "Touch Sensor"
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(all_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text.y.right = element_text(angle = 0),
+    axis.text.x = element_text(hjust = 1),
+    legend.position = "right"
+  )
+
+```
+ 
+

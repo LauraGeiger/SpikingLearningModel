@@ -1,0 +1,180 @@
+---
+title: "BG Testing Performance"
+output: html_notebook
+---
+
+```{r}
+install.packages("tidyverse")
+install.packages("readxl")
+install.packages("ggplot2")
+remove.packages("rlang")
+install.packages("rlang")
+install.packages("ggstatsplot")
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(ggstatsplot)
+library(patchwork)
+library(readxl)
+library(dplyr)
+library(purrr)
+library(stringr)
+
+# Experiment numbers
+exp_numbers <- sprintf("%03d", 22:27)
+sheet_names <- c("reward_over_time", "expected_reward_over_time", "dopamine_over_time", "activation_over_time")
+
+# Base folder path
+base_path <- "../Data/Experiments/02_Grasping"
+
+# Function to safely load one experiment
+load_experiment_data <- function(exp_num, sheets) {
+  exp_path <- file.path(base_path, exp_num)
+  file <- list.files(exp_path, pattern = "MotorLoop\\.xlsx$", full.names = TRUE)[1]
+  
+  if (length(file) == 0) {
+    warning(paste("No MotorLoop.xlsx found for experiment", exp_num))
+    return(NULL)
+  }
+  
+  # Dynamically read all sheets
+  exp_data <- map(sheets, ~ read_excel(file, sheet = .x) %>% mutate(iteration = time / 100))
+  names(exp_data) <- sheets
+  exp_data
+}
+
+# Load all experiments into a named list
+experiments <- set_names(map(exp_numbers, ~ load_experiment_data(.x, sheet_names)), exp_numbers)
+
+# Add goal to each experiment
+experiments <- map(experiments, function(exp) {
+  df <- exp$reward_over_time
+  goal_col <- names(df)[
+    sapply(df, function(x) any(x == 1)) & !(names(df) %in% c("time", "iteration"))
+  ]
+  
+  exp$goal <- goal_col
+  exp
+})
+
+# --- Helper function: extract data from one sheet ---
+extract_sheet_data <- function(experiments, sheet_name) {
+  map_dfr(names(experiments), function(exp_num) {
+    exp <- experiments[[exp_num]]
+    goal_col <- exp$goal
+    df <- exp[[sheet_name]]
+    
+    if (is.null(df) || length(goal_col) == 0 || !(goal_col %in% names(df))) return(NULL)
+    
+    df %>%
+      select(iteration, !!sym(goal_col)) %>%
+      rename(value = !!sym(goal_col)) %>%
+      mutate(
+        experiment = exp_num,
+        goal = goal_col,
+        sheet = sheet_name
+      )
+  })
+}
+
+# --- Combine all sheets into one tidy dataframe ---
+all_data <- map_dfr(sheet_names, extract_sheet_data, experiments = experiments)
+all_data <- all_data %>%
+  mutate(
+    sheet_clean = sheet %>%
+      str_remove("_over_time$") %>%        # remove "_over_time"
+      str_replace_all("_", " ") %>%        # replace underscores with spaces
+      str_to_title(), 
+    sheet_clean = factor(sheet_clean,      # convert to factor
+                         levels = sheet_names %>% 
+                           str_remove("_over_time$") %>%
+                           str_replace_all("_", " ") %>%
+                           str_to_title())
+  )
+```
+
+
+```{r}
+ggplot(all_data, aes(x = iteration, y = value, group = experiment, color = experiment)) +
+  geom_line(alpha = 0.6, size = 1) +
+  facet_grid(goal ~ sheet_clean, scales = "fixed") +  # rows = goals, columns = sheets
+  labs(
+    x = "Iteration",
+    y = "Value",
+    color = "Experiment"
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(all_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  scale_y_continuous(
+    breaks = scales::pretty_breaks(n = 3)   # 3 ticks on y-axis
+  )+
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text( hjust = 1),
+    legend.position = "none"
+  )
+
+```
+
+```{r}
+
+# Function to compute percentage correct per sheet
+compute_percentage_correct <- function(df, goal_col) {
+  df_filtered <- df %>%
+    filter(row_number() > 2)  # ignore first two rows
+  total <- nrow(df_filtered)
+  correct <- sum(df_filtered[[goal_col]] == 1, na.rm = TRUE)
+  100 * correct / total
+}
+
+# Build summary table
+performance_summary <- map_dfr(names(experiments), function(exp_num) {
+  exp <- experiments[[exp_num]]
+  goal <- exp$goal
+  
+  tibble(
+    experiment = exp_num,
+    goal = goal,
+    percent_activation = compute_percentage_correct(exp$activation_over_time, goal),
+    percent_reward = compute_percentage_correct(exp$reward_over_time, goal)
+  )
+})
+
+# Reshape to long format for plotting
+performance_long <- performance_summary %>%
+  pivot_longer(cols = c(percent_reward, percent_activation),
+               names_to = "metric",
+               values_to = "percent") %>%
+  mutate(metric = recode(metric,
+  "percent_reward" = "Model Reward",
+  "percent_activation" = "Correct Activation"))
+
+performance_mean <- performance_long %>%
+  group_by(goal, metric) %>%
+  summarise(mean_percent = mean(percent), .groups = "drop")
+
+ggplot(performance_long, aes(x = goal, y = percent)) +
+  geom_boxplot(width = 0.2, alpha = 0.6) +       # boxplot
+  geom_jitter(aes(color = goal), width = 0.1, height = 0, size = 2, alpha = 0.8) +  # individual points
+  geom_point(data = performance_mean, aes(x = goal, y = mean_percent),
+               color = "darkred", size = 3, shape = 16) +
+  geom_label(data = performance_mean,
+               aes(x = goal, y = mean_percent, label = paste0("mean = ", round(mean_percent, 1))),
+               fill = "white", color = "black", label.r = unit(0.15, "lines"),
+               size = 3, label.padding = unit(0.05, "lines"), hjust = 0, nudge_x = 0.15) +
+  facet_wrap(~ metric, nrow = 1) +               # separate panels for activation vs reward
+  labs(x = "Goal",
+       y = "Percentage") +
+  scale_x_discrete(expand = expansion(mult = c(0, 0.4))) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+
+```
+
+ 
+
