@@ -202,11 +202,11 @@ class MotorLearning:
             self.axs_loops[idx].set_axis_off() 
             ax_loops = self.axs_loops[idx].inset_axes([0,0,1,1]) #[x0, y0, width, height]
             self.loops_texts[idx] = ax_loops.text(0.5, 0.5, f'Train\n{loop.name}', rotation=90, ha='center', va='center', transform=ax_loops.transAxes)
-            self.buttons[f'{loop.name}'] = Button(ax_loops, label='')#, textalignment='center')
+            self.buttons[f'{loop.name}'] = Button(ax_loops, label='')
             self.buttons[f'{loop.name}'].on_clicked(lambda event, idx=idx: self.toggle_train_loop(event=event, loop_idx=idx))
             # Load pretrained weights
             ax_loops_pretrained = self.axs_loops[idx].inset_axes([0,-0.2,1,0.2]) #[x0, y0, width, height]
-            self.buttons[f'{loop.name}_pretrained'] = Button(ax_loops_pretrained, label='Use pre-\ntrained')#, textalignment='center')
+            self.buttons[f'{loop.name}_pretrained'] = Button(ax_loops_pretrained, label='Use pre-\ntrained')
             self.buttons[f'{loop.name}_pretrained'].on_clicked(lambda event, idx=idx: self.load_trained_weights(event=event, loop_idx=idx))
             
             # Init probabilities
@@ -263,7 +263,6 @@ class MotorLearning:
                 label_text = '\n'.join(name.split())
                 self.buttons[f'{name}'] = Button(ax_selections, label=f'{label_text}', color='None', hovercolor='lightgray')
                 self.buttons[f'{name}'].on_clicked(lambda event, loop=loop, i=i: self.update_goals(loop, i))
-                #self.buttons[f'probability_{name}'] = ax_selections.text(0.5, 0.03, '', ha='center')
                 if idx == 0:
                     self.buttons[f'sensor_flex_{name}'] = ax_selections.text(0.5, 0.9, '', ha='center')
                     if i > 0: 
@@ -491,7 +490,7 @@ class MotorLearning:
                     self.ser_exo = serial.Serial(
                         port='COM11',       # For HC-06
                         baudrate=9600,      # Baud rate for connection to bluetooth module
-                        write_timeout=5           # Timeout for read in seconds
+                        write_timeout=5     # Timeout for read in seconds
                     )
                     print(f"Serial connection to exoskeleton established on port {self.ser_exo.port}")
                 except Exception as e:
@@ -549,8 +548,8 @@ class MotorLearning:
 
     def read_sensor_data(self, duration=5000, reset=True):
         if reset:
-            self.ser_sensor.flushInput() # delete values in serial input buffer
-            self.recorded_sensor_data_flex = []  # Stores all flex sensor readings
+            self.ser_sensor.flushInput()         # delete values in serial input buffer
+            self.recorded_sensor_data_flex = []   # Stores all flex sensor readings
             self.recorded_sensor_data_touch = []  # Stores all touch sensor readings
 
         start_time = time.time()
@@ -590,10 +589,6 @@ class MotorLearning:
             self.sensor_times.append(int(h.t))
     
     def analyze_sensor_data_flex(self):
-        #print("self.recorded_sensor_data_flex")
-        #for row in self.recorded_sensor_data_flex:
-        #    print(row)
-
         # Remove invalid data
         self.recorded_sensor_data_flex = [row for row in self.recorded_sensor_data_flex
             if len(row) == self.num_flex_sensors and all(int(val) != 0 for val in row)]
@@ -630,7 +625,6 @@ class MotorLearning:
             
             self.performed_action = ''.join(['1' if value else '0' for value in flexion_detected])
             self.performed_action = self.performed_action[:len(self.loops[0].actions_names)]
-            #print(f"performed action = {self.performed_action}")
         else:
             print("Not enough data from flex sensors")
         self.fig.canvas.draw_idle()
@@ -638,14 +632,9 @@ class MotorLearning:
         plt.pause(0.001)  # tiny pause lets GUI update
 
     def analyze_sensor_data_touch(self, grasp=False, hold=False):
-        
         # Remove invalid data
         self.recorded_sensor_data_touch = [row for row in self.recorded_sensor_data_touch
             if len(row) == self.num_touch_sensors and all(int(val) != 0 for val in row)]
-        
-        #print("self.recorded_sensor_data_touch")
-        #for row in self.recorded_sensor_data_touch:
-        #    print(row)
 
         if self.recorded_sensor_data_touch:
             N = min(5, len(self.recorded_sensor_data_touch))
@@ -678,8 +667,6 @@ class MotorLearning:
                     self.buttons[f'sensor_drop_{name}'].set_text(text)
 
                     self.sensor_touch_hold_over_time[i].append(delta)
-
-                #print(f"{name}: start={int(start[i])} end={int(end[i])}")
         else:
             print("Not enough data from touch sensors")
         self.fig.canvas.draw_idle()
@@ -911,11 +898,8 @@ class MotorLearning:
         
         if self.loops[0].selected_action:
             action_command, max_duration = self.generate_action_command()
-            #print(f"Perform action: {self.loops[0].selected_action[0]} max_duration {max_duration}")
             
-        if max_duration: # perform action
-            #start_stop_command = 'S'
-    
+        if max_duration: # perform action    
             # Send action command
             self.ser_exo.write(action_command.encode())
 
@@ -952,7 +936,7 @@ class MotorLearning:
     def update_joint_duration_mapping(self, time_correction):
         grasp_type = self.grasp_types[self.loops[1].selected_goal.index('1')] if '1' in self.loops[1].selected_goal else 'None'
         for joint_id, corr in enumerate(time_correction):
-            if abs(corr) >= 10 and joint_id > 1: ##### remove joint_id restriction
+            if abs(corr) >= 10: 
                 self.joint_duration_mapping[grasp_type][self.joints[joint_id]] += int(corr) * 10
                 self.joint_duration_mapping[grasp_type][self.joints[joint_id]] = min(self.max_duration_flexors, max(0, self.joint_duration_mapping[grasp_type][self.joints[joint_id]]))
 
@@ -1163,9 +1147,7 @@ class MotorLearning:
                         if loop.training and self.training_goal_idx >= len(loop.goals) - 1:
                             self.toggle_train_loop(loop_idx=idx)
                             if idx < len(self.loops) - 1:
-                                self.toggle_train_loop(loop_idx=idx+1) 
-                            else:
-                                self.save() ######### TODO: remove after testing of pretraining                           
+                                self.toggle_train_loop(loop_idx=idx+1)                         
                             continue
                     if loop.training: 
                         goal = loop.goals[self.training_goal_idx]
@@ -1188,9 +1170,6 @@ class MotorLearning:
                     desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
                     desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
                     desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
-                    #desired_grasp_type = '001' ########################
-                    #desired_joints = '0110' ########################
-                    #desired_actuators = '0110' ########################
                     norm_touch_delta_grasp = [min(1.0, delta_grasp / max_delta_grasp) for delta_grasp, max_delta_grasp in zip(self.touch_sensor_delta_grasp, self.touch_sensor_expected_max_delta_grasp)]
                     norm_touch_delta_hold = [min(1.0, delta_hold / max_delta_hold) for delta_hold, max_delta_hold in zip(self.touch_sensor_delta_hold, self.touch_sensor_expected_max_delta_hold)]
                     self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, norm_touch_delta_grasp, norm_touch_delta_hold)
@@ -1820,13 +1799,11 @@ class BasalGangliaLoop:
                   
         for goal in self.goals:
             if hw_connected and not self.child_loop and performed_action:
-                #action_dict = dict(zip(self.actions_names, [c == '1' for c in performed_action]))
                 action_correct = performed_action == self.selected_goal
             elif self.selected_action:
                 action_dict = dict(zip(self.actions_names, [c == '1' for c in self.selected_action[0]]))
                 action_correct = action_dict == target_action_dict
             else:
-                #action_dict = {}
                 action_correct = False
             
             if goal == self.selected_goal and action_correct:
@@ -1835,16 +1812,14 @@ class BasalGangliaLoop:
                 self.reward_over_time[goal].append(0)
                 
             current_expected_reward = self.expected_reward_over_time[goal][-1]
-            self.dopamine_over_time[goal].append(round(self.reward_over_time[goal][-1] - current_expected_reward, 4)) # TODO: determine dopamine from relative rate of SNc
+            self.dopamine_over_time[goal].append(round(self.reward_over_time[goal][-1] - current_expected_reward, 4))
             
-            #'''
             for action in self.actions:
                 if self.reward_over_time[goal][-1] - current_expected_reward > 0:
                     self.SNc_burst(event=None, action=action)
                 elif self.reward_over_time[goal][-1] - current_expected_reward < 0:
                     self.SNc_dip(event=None, action=action)
-            #'''
-        
+                    
             if goal == self.selected_goal:
                 #For selected goal update expected reward based on actual reward
                 self.expected_reward_over_time[goal].append(round(current_expected_reward + self.learning_rate * (self.reward_over_time[goal][-1] - current_expected_reward), 4))
@@ -1905,8 +1880,7 @@ class BasalGangliaLoop:
 
     def load_trained_weights(self):
         pattern = f"PretrainedWeights/*_Trained_Weights_{self.name}.pkl"
-        matches = glob.glob(pattern)
-        #filename = f"PretrainedWeights\Trained_Weights_{self.name}.pkl"  
+        matches = glob.glob(pattern)  
         
         if matches:
             filename = matches[0]  # first match
@@ -2195,15 +2169,6 @@ class Cerebellum:
             ('IO', 'DCN', 'IO_to_DCN',   0, 3.0,  1,  1,  10, 0, 1),  # excitatory
             ('PC', 'DCN', 'PC_to_DCN', -85, 5.0,  5,  1, -10, 0, 1)   # inhibitory
         ]
-        # for 3 joints
-        #self.connection_specs = [# pre_group, post_group, label, e_rev, weight, tau, threshold, delay, sparsity, grouped
-        #    ('PN', 'GC',  'PN_to_GC',    0, 0.5,  10, 10, 1, 1, 0),  # excitatory
-        #    ('GC', 'DCN', 'GC_to_DCN',   0, 0.04,  5, 10, 1, 0, 0),  # excitatory
-        #    ('GC', 'PC',  'GC_to_PC',    0, 0.3,   3, 10, 1, 0, 0),  # excitatory
-        #    ('IO', 'PC',  'IO_to_PC',    0, 0.0,   5, 10, 1, 0, 1),  # excitatory
-        #    ('IO', 'DCN', 'IO_to_DCN',   0, 0.7,   3, 10, 1, 0, 1),  # excitatory
-        #    ('PC', 'DCN', 'PC_to_DCN', -85, 0.5,   3, 10, 1, 0, 1)   # inhibitory
-        #]
         
         self.num_of_plots = min(6, len(self.actuators))
         self._is_updating_programmatically = False
@@ -2491,7 +2456,6 @@ class Cerebellum:
         self.axs_input[1].set_yticks(yticks)
         self.axs_input[1].set_yticklabels(yticklabels)
         self.axs_input[1].xaxis.set_major_formatter(ms_to_s)
-        #self.axs_input[1].legend(loc='upper right')
 
         # Spikes of other cells
         for i, ch in enumerate(range(self.num_of_plots)):
@@ -2526,7 +2490,6 @@ class Cerebellum:
             self.axs_plot[self.row_spike][i].set_yticks(yticks)
             self.axs_plot[self.row_spike][i].set_yticklabels(yticklabels)
             self.axs_plot[self.row_spike][i].xaxis.set_major_formatter(ms_to_s)
-        #self.axs_plot[self.row_spike][-1].legend(loc='upper right')
 
     def _init_control_panel(self):
         for i, name in enumerate(self.joints[1:]):
@@ -2556,7 +2519,6 @@ class Cerebellum:
             self.axs_plot[self.row_weights][idx].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_weights][idx].set_ylim(0, 1.1 * self.max_weight)
             self.axs_plot[self.row_weights][idx].xaxis.set_major_formatter(ms_to_s)
-            #self.axs_plot[self.row_weights][idx].set_xlabel('Simulation\ntime (s)')
         self.axs_plot[self.row_weights][-1].legend(loc='upper right')
 
     def _init_error_plot(self):
@@ -2571,8 +2533,6 @@ class Cerebellum:
             self.axs_plot[self.row_errors][plot_idx].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_errors][plot_idx].set_ylim(-1.1, 1.1)
             self.axs_plot[self.row_errors][plot_idx].xaxis.set_major_formatter(ms_to_s)
-            #self.axs_plot[self.row_errors][plot_idx].set_xlabel('Simulation\ntime (s)')
-        #self.axs_plot[self.row_errors][-1].legend(loc='upper right')
 
     def _init_correction_plot(self):
         # Correction plot
@@ -2587,11 +2547,9 @@ class Cerebellum:
             self.axs_plot[self.row_corrections][plot_idx].set_ylim(-1.1, 1.1)
             self.axs_plot[self.row_corrections][plot_idx].xaxis.set_major_formatter(ms_to_s)
             self.axs_plot[self.row_corrections][plot_idx].set_xlabel('Simulation\ntime (s)')
-            #self.axs_plot[self.row_corrections][plot_idx].axhline(y=0, color="black", linestyle='solid', linewidth=1, alpha=0.5)
             self.axs_plot[self.row_corrections][plot_idx].axhline(y=-5, color="black", linestyle='solid', linewidth=1, alpha=0.5)
             self.axs_plot[self.row_corrections][plot_idx].axhline(y=5, color="black", linestyle='solid', linewidth=1, alpha=0.5)
             self.axs_plot[self.row_corrections][plot_idx].set_ylim(-11, 11)
-        #self.axs_plot[self.row_corrections][-1].legend(loc='upper right')
 
     def update_touch_sensor_values(self, finger_idx, val, dir='pos'):
         if self._is_updating_programmatically:
@@ -2801,7 +2759,6 @@ class Cerebellum:
                     voltages = np.array([(self.recordings[ct][plot_id][j]) for j in range(self.cell_types_numbers[ct][1])])
                     voltages_pos = voltages[:len(voltages) // 2]
                     voltages_neg = voltages[len(voltages) // 2:]
-                    #avg_voltage = np.mean(voltages, axis=0)
                     for n, voltage in enumerate(voltages_pos):
                         self.mem_lines_pos[ct][plot_id][n].set_data(np.array(self.t_vec), voltage)
                     for n, voltage in enumerate(voltages_neg):
