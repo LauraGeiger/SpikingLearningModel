@@ -1,0 +1,440 @@
+---
+title: "Touch Sensors No Grasp vs Grasp"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(ggstatsplot)
+library(patchwork)
+library(readxl)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(scales)
+
+# Base folder path
+base_path <- "../Data/Experiments/02_Grasping"
+
+grasping_data <- read_excel(file.path(base_path, "/02_Grasping.xlsx"))
+
+cylinder_numbers <- grasping_data %>%
+  filter(`Object shape` == "Cylinder", Number != 19) %>%
+  pull(Number)
+
+no_object_numbers <- grasping_data %>%
+  filter(`Object shape` == "None", !(Number %in% c(7, 28, 29, 30))) %>%
+  pull(Number)
+
+
+exp_numbers <- sprintf("%03d", c(no_object_numbers, cylinder_numbers))
+```
+
+```{r}
+sheet_names_motorloop <- c("reward_over_time", "expected_reward_over_time", "dopamine_over_time", "activation_over_time")
+sheet_names_motorlearning <- c("sensor_flex_over_time", "sensor_touch_grasp_over_time", "sensor_touch_hold_over_time", "feedback_over_time")
+sheet_names_cerebellum <- c("error_over_time", "correction_over_time")
+
+# Function to safely load one experiment
+load_motorloop_data <- function(exp_num, sheets) {
+  exp_path <- file.path(base_path, exp_num)
+  file <- list.files(exp_path, pattern = "MotorLoop\\.xlsx$", full.names = TRUE)[1]
+  
+  if (length(file) == 0) {
+    warning(paste("No MotorLoop.xlsx found for experiment", exp_num))
+    return(NULL)
+  }
+  
+  # Dynamically read all sheets
+  exp_data <- map(sheets, ~ read_excel(file, sheet = .x) %>% mutate(iteration = time / 100))
+  names(exp_data) <- sheets
+  exp_data
+}
+
+# Function to safely load one experiment
+load_motorlearning_data <- function(exp_num, sheets) {
+  exp_path <- file.path(base_path, exp_num)
+  file <- list.files(exp_path, pattern = "MotorLearning\\.xlsx$", full.names = TRUE)[1]
+  
+  if (length(file) == 0) {
+    warning(paste("No MotorLearning.xlsx found for experiment", exp_num))
+    return(NULL)
+  }
+  
+  # Dynamically read all sheets
+  exp_data <- map(sheets, ~ read_excel(file, sheet = .x) %>% mutate(iteration = time / 100))
+  names(exp_data) <- sheets
+  exp_data
+}
+
+# Function to safely load one experiment
+load_cerebellum_data <- function(exp_num, sheets) {
+  exp_path <- file.path(base_path, exp_num)
+  file <- list.files(exp_path, pattern = "Cerebellum\\.xlsx$", full.names = TRUE)[1]
+  
+  if (length(file) == 0) {
+    warning(paste("No Cerebellum.xlsx found for experiment", exp_num))
+    return(NULL)
+  }
+  
+  # Dynamically read all sheets
+  exp_data <- map(sheets, ~ read_excel(file, sheet = .x) %>% mutate(iteration = time / 100))
+  names(exp_data) <- sheets
+  exp_data
+}
+
+# Load all experiments into a named list
+motorlearning_data <- set_names(map(exp_numbers, ~ load_motorlearning_data(.x, sheet_names_motorlearning)), exp_numbers)
+motorloop_data <- set_names(map(exp_numbers, ~ load_motorloop_data(.x, sheet_names_motorloop)), exp_numbers)
+cerebellum_data <- set_names(map(exp_numbers, ~ safely(load_cerebellum_data)(.x, sheet_names_cerebellum)$result), exp_numbers) %>% compact()
+```
+
+```{r}
+# --- Add goal to motorloop_data and copy to motorlearning_data ---
+motorloop_data <- map(motorloop_data, function(exp) {
+  if (!is.null(exp$reward_over_time)) {
+    df <- exp$reward_over_time
+    goal_col <- names(df)[
+      sapply(df, function(x) any(x == 1)) & !(names(df) %in% c("time", "iteration"))
+    ]
+    exp$goal <- goal_col
+  }
+  exp
+})
+
+# Copy detected goals into motorlearning_data (if available)
+motorlearning_data <- map2(motorlearning_data, motorloop_data, function(learn_exp, loop_exp) {
+  if (!is.null(loop_exp$goal)) {
+    learn_exp$goal <- loop_exp$goal
+  }
+  learn_exp
+})
+
+# Copy detected goals into cerebellum_data (if available)
+common_exps <- intersect(names(cerebellum_data), names(motorloop_data))
+cerebellum_data <- map2(cerebellum_data[common_exps], motorloop_data[common_exps], function(cerebellum_exp, loop_exp) {
+  if (!is.null(loop_exp$goal)) {
+    cerebellum_exp$goal <- loop_exp$goal
+  }
+  cerebellum_exp
+})
+
+```
+
+```{r}
+extract_common_info <- function(df, exp_num, sheet_name, sheet_names, grasping_data) {
+  # Get metadata from grasping_data
+  meta <- grasping_data %>%
+    filter(Number == as.numeric(exp_num)) %>%
+    select(`Object shape`, `Object size (mm)`, `Weight (g)`, `Model type`, `Grasp type`, `Flexion Threshold`, `Touch Threshold`, `Drop Threshold`, `Overload Threshold`, `Update thumb opposition duration`, `Update thumb flexion duration`) %>%
+    slice(1)  # ensure a single row
+  
+  df %>%
+    mutate(
+      experiment = exp_num,
+      sheet = sheet_name,
+      sheet_clean = sheet_name %>%
+        str_remove("_over_time$") %>%
+        str_replace_all("_", " ") %>%
+        str_to_title(),
+      sheet_clean = factor(
+        sheet_clean,
+        levels = sheet_names %>%
+          str_remove("_over_time$") %>%
+          str_replace_all("_", " ") %>%
+          str_to_title()
+      ),
+      `Object shape` = meta$`Object shape`,
+      `Object size (mm)` = meta$`Object size (mm)`,
+      `Weight (g)` = meta$`Weight (g)`,
+      `Model type` = meta$`Model type`,
+      `Grasp type` = meta$`Grasp type`,
+      `Flexion Threshold` = meta$`Flexion Threshold`,
+      `Touch Threshold` = meta$`Touch Threshold`,
+      `Drop Threshold` = meta$`Drop Threshold`,
+      `Overload Threshold` = meta$`Overload Threshold`,
+      `Update thumb opposition duration` = meta$`Update thumb opposition duration`,
+      `Update thumb flexion duration` = meta$`Update thumb flexion duration`
+    )
+}
+
+```
+
+```{r}
+extract_motorloop_data <- function(experiments, sheet_names, grasping_data) {
+  map_dfr(sheet_names, function(sheet_name) {
+    map_dfr(names(experiments), function(exp_num) {
+      exp <- experiments[[exp_num]]
+      df <- exp[[sheet_name]]
+      goal_col <- exp$goal
+      
+      if (is.null(df) || length(goal_col) == 0 || !(goal_col %in% names(df))) return(NULL)
+      
+      df %>%
+        select(iteration, !!sym(goal_col)) %>%
+        rename(value = !!sym(goal_col)) %>%
+        mutate(goal = goal_col) %>%
+        extract_common_info(exp_num, sheet_name, sheet_names, grasping_data)
+    })
+  })
+}
+
+```
+
+
+```{r}
+extract_motorlearning_data <- function(experiments, sheet_names, grasping_data) {
+  map_dfr(sheet_names, function(sheet_name) {
+    map_dfr(names(experiments), function(exp_num) {
+      exp <- experiments[[exp_num]]
+      df <- exp[[sheet_name]]
+      goal_col <- exp$goal
+      if (is.null(df)) return(NULL)
+      
+      # --- handle feedback sheet separately ---
+      if (sheet_name == "feedback_over_time") {
+        feedback_cols <- intersect(c("grasp", "hold"), names(df))
+        if (length(feedback_cols) == 0) return(NULL)
+        
+        df_long <- df %>%
+          pivot_longer(
+            cols = all_of(feedback_cols),
+            names_to = "feedback_type", 
+            values_to = "value" 
+            ) %>% 
+          mutate(
+            sensor = feedback_type
+            ) %>% # unify column naming 
+          select(-feedback_type)
+      } else {
+        # --- default: sensor sheets with 0,1,2,3 ---
+        sensor_cols <- intersect(c("0", "1", "2", "3"), names(df))
+        if (length(sensor_cols) == 0) return(NULL)
+        
+        df_long <- df %>%
+          pivot_longer(
+            cols = all_of(sensor_cols),
+            names_to = "sensor",
+            values_to = "value"
+          )
+      }
+      
+      # Add goal and metadata
+      df_long %>%
+        mutate(goal = goal_col) %>%
+        extract_common_info(exp_num, sheet_name, sheet_names, grasping_data)
+    })
+  })
+}
+
+```
+
+```{r}
+extract_cerebellum_data <- function(experiments, sheet_names, grasping_data) {
+  map_dfr(sheet_names, function(sheet_name) {
+    map_dfr(names(experiments), function(exp_num) {
+      exp <- experiments[[exp_num]]
+      df <- exp[[sheet_name]]
+      goal_col <- exp$goal
+      if (is.null(df)) return(NULL)
+      
+      sensor_cols <- intersect(c("0", "1", "2", "3"), names(df))
+      if (length(sensor_cols) == 0) return(NULL)
+      
+      df_long <- df %>%
+        pivot_longer(
+          cols = all_of(sensor_cols),
+          names_to = "sensor",
+          values_to = "value"
+        )
+    
+    # Add goal and metadata
+    df_long %>%
+      mutate(goal = goal_col) %>%
+      extract_common_info(exp_num, sheet_name, sheet_names, grasping_data)
+    })
+  })
+}
+
+```
+
+```{r}
+all_data_BG <- extract_motorloop_data(motorloop_data, sheet_names_motorloop, grasping_data)
+all_data_sensor <- extract_motorlearning_data(motorlearning_data, sheet_names_motorlearning, grasping_data)
+all_data_CB <- extract_cerebellum_data(cerebellum_data, sheet_names_cerebellum, grasping_data)
+
+all_data_combined <- bind_rows(all_data_sensor, all_data_BG, all_data_CB)
+
+
+```
+
+
+```{r}
+all_data_combined <- all_data_combined %>%
+  filter(
+    as.numeric(as.character(iteration)) >= 0,
+    as.numeric(as.character(iteration)) <= 50
+  )
+
+sensor_data_touch <- all_data_combined %>%
+  filter(sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold")) %>%
+  filter(sensor != "2") %>% # filter out middle finger sensor data
+  mutate(
+    label = paste0(`Grasp type`, "\n", goal),
+    sensor = case_when(
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "0" ~ "1",
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "1" ~ "2",
+      TRUE ~ sensor  # keep all other values unchanged
+    ),
+    sheet_clean = factor(
+      sheet_clean,
+      levels = c("Sensor Touch Grasp", "Sensor Touch Hold"),
+      labels = c("Grasp", "Hold")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb\n", "Index\nFinger") 
+    )
+  )
+
+feedback_data <- all_data_combined %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%  # select the two feedback types
+  mutate(sheet_clean = case_when(
+    sensor == "grasp" ~ "Grasp",
+    sensor == "hold"  ~ "Hold"
+  ))
+
+
+plot_data <- sensor_data_touch %>%
+  left_join(
+    feedback_data %>%
+      select(experiment, iteration, sensor, value) %>%
+      pivot_wider(
+        names_from = sensor,
+        values_from = value,
+        names_prefix = "",
+        names_glue = "{sensor}_feedback"
+      ),
+    by = c("experiment", "iteration")
+  )
+
+plot_data <- plot_data %>%
+  mutate(
+    feedback_value = case_when(
+      sheet_clean == "Grasp" ~ grasp_feedback,
+      sheet_clean == "Hold"  ~ hold_feedback
+    )
+  )
+```
+
+
+```{r}
+plot_data_grasp <- filter(plot_data, sheet_clean == "Grasp")
+plot_data_grasp <- plot_data_grasp %>%
+  mutate(
+    plot_category = case_when(
+      `Object shape` == "Cylinder" & feedback_value == 1   ~ "Object Grasped\nSuccessfull",
+      `Object shape` == "Cylinder" & feedback_value == 0   ~ "Object Grasped\nUnsuccessfull",
+      `Object shape` == "None"     & is.na(feedback_value) ~ "Grasping\nWithout Object",
+    ),
+    plot_category = factor(
+      plot_category,
+      levels = c(
+        "Grasping\nWithout Object",
+        "Object Grasped\nSuccessfull",
+        "Object Grasped\nUnsuccessfull"
+      )
+    )
+  ) %>% 
+  drop_na(plot_category)
+
+mean_data <- plot_data_grasp %>%
+  group_by(sensor, plot_category, label, `Model type`) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), n_points = n(), .groups = "drop")
+
+ggplot(plot_data_grasp, aes(x = label, y = value, fill = `Model type`)) +
+  geom_violin(fill = NULL, alpha = 0.2, position = position_dodge(width = 0.8)) +  # Violin plot
+  #geom_jitter(aes(color = feedback_color), width = 0.1, alpha=0.5) +
+  geom_hline(yintercept = 8, linetype = "dashed", color = "black", size = 0.8) +
+  geom_boxplot(width = 0.1, alpha = 0.7, outlier.shape = NA, position = position_dodge(width = 0.8)) + # Boxplot
+  geom_point(data = mean_data, aes(y = mean_value, group = `Model type`),
+             color = "darkred", size = 2, shape = 16, position = position_dodge(width = 0.8)) +
+  geom_label(data = mean_data,
+             aes(y = mean_value, label = paste0("", round(mean_value, 0)), group = `Model type`),
+             fill = "white", color = "black", label.r = unit(0.15, "lines"),
+             size = 2, label.padding = unit(0.05, "lines"), hjust = -0.3, position = position_dodge(width = 0.8)) +
+  #facet_grid(sheet_clean + sensor ~ plot_category, scales = "free_y") +  
+  facet_grid(sensor ~ plot_category, scales = "free_y") +  # Split by Loop
+  scale_color_identity() +  # use the exact colors in feedback_color
+  labs(
+    x = NULL,
+    y = "Value",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    panel.spacing = unit(1, "lines"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+```
+
+
+```{r}
+plot_data_hold <- filter(plot_data, sheet_clean == "Hold")
+plot_data_hold <- plot_data_hold %>%
+  mutate(
+    plot_category = case_when(
+      `Object shape` == "Cylinder" & feedback_value == 1   ~ "Object Held\nSuccessfull",
+      `Object shape` == "Cylinder" & feedback_value == 0   ~ "Object Held\nUnsuccessfull",
+      `Object shape` == "None"     & is.na(feedback_value) ~ "Holding\nWithout Object",
+    ),
+    plot_category = factor(
+      plot_category,
+      levels = c(
+        "Holding\nWithout Object",
+        "Object Held\nSuccessfull",
+        "Object Held\nUnsuccessfull"
+      )
+    )
+  ) %>% 
+  drop_na(plot_category)
+
+mean_data <- plot_data_hold %>%
+  group_by(sensor, plot_category, label, `Model type`) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), n_points = n(), .groups = "drop")
+
+ggplot(plot_data_hold, aes(x = label, y = value, fill = `Model type`)) +
+  geom_violin(fill = NULL, alpha = 0.2, position = position_dodge(width = 0.8)) +  # Violin plot
+  #geom_jitter(aes(color = feedback_color), width = 0.1, alpha=0.5) +
+  geom_hline(yintercept = -5, linetype = "dashed", color = "black", size = 0.8) +
+  geom_boxplot(width = 0.1, alpha = 0.7, outlier.shape = NA, position = position_dodge(width = 0.8)) + # Boxplot
+  geom_point(data = mean_data, aes(y = mean_value, group = `Model type`),
+             color = "darkred", size = 2, shape = 16, position = position_dodge(width = 0.8)) +
+  geom_label(data = mean_data,
+             aes(y = mean_value, label = paste0("", round(mean_value, 0)), group = `Model type`),
+             fill = "white", color = "black", label.r = unit(0.15, "lines"),
+             size = 2, label.padding = unit(0.05, "lines"), hjust = -0.3, position = position_dodge(width = 0.8)) +
+  #facet_grid(sheet_clean + sensor ~ plot_category, scales = "free_y") +  
+  facet_grid(sensor ~ plot_category, scales = "free_y") +  # Split by Loop
+  scale_color_identity() +  # use the exact colors in feedback_color
+  labs(
+    x = NULL,
+    y = "Value",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    panel.spacing = unit(1, "lines"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+```
+
+
+

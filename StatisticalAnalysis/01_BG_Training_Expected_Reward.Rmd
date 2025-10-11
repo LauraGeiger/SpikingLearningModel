@@ -9,17 +9,31 @@ library(tidyr)
 library(dplyr)
 library(ggplot2)
 library(purrr)
+library(forcats)
+library(scales)
+#install.packages("colorspace")  # if not already installed
+library(colorspace)
+#install.packages("ggnewscale")  # if not already installed
+library(ggnewscale)
 ```
 
+
 ```{r}
-# Base path containing experiment folders
-base_path <- "../Data/Experiments/01_BG_Training/1_RewardCriteria_ExpectedReward/01_SIM/"
 
-# List all experiment subfolders (e.g., "001", "002", ...)
-exp_folders <- list.dirs(base_path, full.names = TRUE, recursive = FALSE)
 
-# Helper function to load both MotorLoop and PremotorLoop from one experiment
-load_experiment <- function(folder) {
+# -------------------------
+# Define base paths
+# -------------------------
+base_paths <- list(
+  "Simulation" = "../Data/Experiments/01_BG_Training/1_RewardCriteria_ExpectedReward/01_SIM/",
+  "Experiment 1A" = "../Data/Experiments/01_BG_Training/1_RewardCriteria_ExpectedReward/02_Exo_Opp_Sensor_at_Actuator/",
+  "Experiment 1B" = "../Data/Experiments/01_BG_Training/1_RewardCriteria_ExpectedReward/03_Exo_Opp_Sensor_at_Finger/"
+)
+
+# -------------------------
+# Helper function to load one experiment folder
+# -------------------------
+load_experiment <- function(folder, dataset_label) {
   exp_id <- basename(folder)  # e.g., "001"
   
   # Find files
@@ -28,49 +42,206 @@ load_experiment <- function(folder) {
   
   # Load data if files exist
   motor <- if (!is.na(motor_file)) {
-    read_excel(motor_file, sheet="expected_reward_over_time") %>%
-      pivot_longer(-time, names_to = "action", values_to = "reward") %>%
-      filter(action != "0000") %>%
+    read_excel(motor_file, sheet = "expected_reward_over_time") %>%
+      pivot_longer(-time, names_to = "goal", values_to = "reward") %>%
+      filter(goal != "0000") %>%
       mutate(loop = "Motor Loop", experiment = exp_id)
   } else {
     NULL
   }
   
   premotor <- if (!is.na(premotor_file)) {
-    read_excel(premotor_file, sheet="expected_reward_over_time") %>%
-      pivot_longer(-time, names_to = "action", values_to = "reward") %>%
-      filter(action != "000") %>%
+    read_excel(premotor_file, sheet = "expected_reward_over_time") %>%
+      pivot_longer(-time, names_to = "goal", values_to = "reward") %>%
+      filter(goal != "000") %>%
       mutate(loop = "Premotor Loop", experiment = exp_id)
   } else {
     NULL
   }
   
-  bind_rows(motor, premotor)
+  bind_rows(motor, premotor) %>%
+    mutate(dataset = dataset_label)
 }
 
-# Apply function to all experiment folders
-all_data <- map_dfr(exp_folders, load_experiment)
+# -------------------------
+# Load all datasets
+# -------------------------
+all_data <- map_dfr(names(base_paths), function(label) {
+  exp_folders <- list.dirs(base_paths[[label]], full.names = TRUE, recursive = FALSE)
+  map_dfr(exp_folders, load_experiment, dataset_label = label)
+})
 
+# -------------------------
+# Load only the LAST experiment per dataset
+# -------------------------
+all_data <- map_dfr(names(base_paths), function(label) {
+  exp_folders <- list.dirs(base_paths[[label]], full.names = TRUE, recursive = FALSE)
+  last_folder <- sort(exp_folders, decreasing = FALSE)[length(exp_folders)]
+  load_experiment(last_folder, dataset_label = label)
+})
+
+# -------------------------
+# Data processing
+# -------------------------
 all_data <- all_data %>%
-  mutate(iteration = time / 100, 
-    reward = reward * 100)
+  mutate(
+    iteration = time / 100,
+    reward = reward * 100,
+    #goal = factor(goal, levels = rev(unique(goal))),
+    goal = fct_rev(fct_inorder(goal))
+  )
 
 
-ggplot(all_data, aes(
-    x = iteration, 
-    y = reward, 
-    color = loop,
-    group = interaction(loop, action)
-  )) +
-  geom_line(size = 1) +
-  facet_wrap(~experiment) + 
+# -------------------------
+# Visualization
+# -------------------------
+ggplot() +
+  # --- Motor loop ribbons ---
+  geom_ribbon(
+    data = filter(all_data, loop == "Motor Loop"),
+    aes(x = iteration, ymin = 50, ymax = reward, fill = goal, group = goal),
+    alpha = 0.3
+  ) +
+  geom_line(
+    data = filter(all_data, loop == "Motor Loop"),
+    aes(x = iteration, y = reward, color = goal, group = goal),
+    size = 0.8,
+    linetype = "solid"
+  ) +
+  scale_fill_viridis_d(name = "Motor Loop\nGoals", direction = -1) +
+  scale_color_viridis_d(name = "Motor Loop\nGoals", direction = -1) +
+  guides(
+    fill = guide_legend(reverse = FALSE, order = 1), 
+    color = guide_legend(reverse = FALSE, order = 1), 
+  ) +
+  ggnewscale::new_scale_fill() +
+  ggnewscale::new_scale_color() +
+
+  # --- Premotor loop ribbons ---
+  geom_ribbon(
+    data = filter(all_data, loop == "Premotor Loop"),
+    aes(x = iteration, ymin = 50, ymax = reward, fill = goal, group = goal),
+    alpha = 0.3
+  ) +
+  geom_line(
+    data = filter(all_data, loop == "Premotor Loop"),
+    aes(x = iteration, y = reward, color = goal, group = goal),
+    size = 0.8,
+    linetype = "twodash"
+  ) +
+  scale_fill_viridis_d(name = "Premotor Loop\nGoals", direction = -1) +
+  scale_color_viridis_d(name = "Premotor Loop\nGoals", direction = -1) +
+  guides(
+    fill = guide_legend(reverse = FALSE, order = 2), 
+    color = guide_legend(reverse = FALSE, order = 2), 
+  ) +
+
+  geom_hline(yintercept = 50, linetype = "dashed", color = "gray40") +
+  facet_wrap(~ dataset, ncol = 1) +
   theme_minimal(base_size = 14) +
   labs(
-    title = "Expected Reward over Iterations",
     x = "Iteration",
-    y = "Expected Reward (%)",
-    color = NULL
+    y = "Expected Reward (%)"
+  ) +
+  theme(
+    legend.position = "right",     # move legends below plot
+    legend.box = "horizontal",      # arrange horizontally
   )
 
 ```
 
+```{r}
+# -------------------------
+# Define base paths
+# -------------------------
+base_paths <- list(
+  "Simulation" = "../Data/Experiments/01_BG_Training/2_RewardCriteria_WeightDiff/01_SIM/",
+  "Experiment 1A" = "../Data/Experiments/01_BG_Training/2_RewardCriteria_WeightDiff/02_Exo_Opp_Sensor_at_Actuator/",
+  "Experiment 1B" = "../Data/Experiments/01_BG_Training/2_RewardCriteria_WeightDiff/03_Exo_Opp_Sensor_at_Finger/"
+)
+
+# -------------------------
+# Load all datasets
+# -------------------------
+all_data <- map_dfr(names(base_paths), function(label) {
+  exp_folders <- list.dirs(base_paths[[label]], full.names = TRUE, recursive = FALSE)
+  map_dfr(exp_folders, load_experiment, dataset_label = label)
+})
+
+# -------------------------
+# Load only the LAST experiment per dataset
+# -------------------------
+all_data <- map_dfr(names(base_paths), function(label) {
+  exp_folders <- list.dirs(base_paths[[label]], full.names = TRUE, recursive = FALSE)
+  last_folder <- sort(exp_folders, decreasing = FALSE)[length(exp_folders)]
+  load_experiment(last_folder, dataset_label = label)
+})
+
+
+# -------------------------
+# Data processing
+# -------------------------
+all_data <- all_data %>%
+  mutate(
+    iteration = time / 100,
+    reward = reward * 100,
+    goal = fct_rev(fct_inorder(goal))
+  )
+
+
+# -------------------------
+# Visualization
+# -------------------------
+ggplot() +
+  # --- Motor loop ribbons ---
+  geom_ribbon(
+    data = filter(all_data, loop == "Motor Loop"),
+    aes(x = iteration, ymin = 50, ymax = reward, fill = goal, group = goal),
+    alpha = 0.3
+  ) +
+  geom_line(
+    data = filter(all_data, loop == "Motor Loop"),
+    aes(x = iteration, y = reward, color = goal, group = goal),
+    size = 0.8,
+    linetype = "solid"
+  ) +
+  scale_fill_viridis_d(name = "Motor Loop\nGoals", direction = -1) +
+  scale_color_viridis_d(name = "Motor Loop\nGoals", direction = -1) +
+  guides(
+    fill = guide_legend(reverse = FALSE, order = 1), 
+    color = guide_legend(reverse = FALSE, order = 1), 
+  ) +
+  ggnewscale::new_scale_fill() +
+  ggnewscale::new_scale_color() +
+
+  # --- Premotor loop ribbons ---
+  geom_ribbon(
+    data = filter(all_data, loop == "Premotor Loop"),
+    aes(x = iteration, ymin = 50, ymax = reward, fill = goal, group = goal),
+    alpha = 0.3
+  ) +
+  geom_line(
+    data = filter(all_data, loop == "Premotor Loop"),
+    aes(x = iteration, y = reward, color = goal, group = goal),
+    size = 0.8,
+    linetype = "twodash"
+  ) +
+  scale_fill_viridis_d(name = "Premotor Loop\nGoals", direction = -1) +
+  scale_color_viridis_d(name = "Premotor Loop\nGoals", direction = -1) +
+  guides(
+    fill = guide_legend(reverse = FALSE, order = 2), 
+    color = guide_legend(reverse = FALSE, order = 2), 
+  ) +
+
+  facet_wrap(~ dataset, ncol = 1) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Iteration",
+    y = "Expected Reward (%)"
+  ) +
+  theme(
+    legend.position = "right",     # move legends below plot
+    legend.box = "horizontal",      # arrange horizontally
+  )
+
+```

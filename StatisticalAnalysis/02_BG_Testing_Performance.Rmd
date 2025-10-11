@@ -4,12 +4,12 @@ output: html_notebook
 ---
 
 ```{r}
-install.packages("tidyverse")
-install.packages("readxl")
-install.packages("ggplot2")
-remove.packages("rlang")
-install.packages("rlang")
-install.packages("ggstatsplot")
+#install.packages("tidyverse")
+#install.packages("readxl")
+#install.packages("ggplot2")
+#remove.packages("rlang")
+#install.packages("rlang")
+#install.packages("ggstatsplot")
 ```
 
 ```{r}
@@ -124,8 +124,8 @@ ggplot(all_data, aes(x = iteration, y = value, group = experiment, color = exper
 
 # Function to compute percentage correct per sheet
 compute_percentage_correct <- function(df, goal_col) {
-  df_filtered <- df %>%
-    filter(row_number() > 2)  # ignore first two rows
+  df_filtered <- df #%>%
+    #filter(row_number() > 2)  # ignore first two rows
   total <- nrow(df_filtered)
   correct <- sum(df_filtered[[goal_col]] == 1, na.rm = TRUE)
   100 * correct / total
@@ -167,9 +167,11 @@ ggplot(performance_long, aes(x = goal, y = percent)) +
                fill = "white", color = "black", label.r = unit(0.15, "lines"),
                size = 3, label.padding = unit(0.05, "lines"), hjust = 0, nudge_x = 0.15) +
   facet_wrap(~ metric, nrow = 1) +               # separate panels for activation vs reward
+  coord_cartesian(ylim = c(0, 100)) +
   labs(x = "Goal",
        y = "Percentage") +
   scale_x_discrete(expand = expansion(mult = c(0, 0.4))) +
+  
   theme_minimal(base_size = 14) +
   theme(legend.position = "none")
 

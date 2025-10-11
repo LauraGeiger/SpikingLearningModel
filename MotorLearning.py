@@ -1133,8 +1133,8 @@ class MotorLearning:
                 
                 for idx, loop in enumerate(self.loops):
                     
-                    #if loop.selected_goal and loop.expected_reward_over_time[loop.selected_goal][-1] > 0.5:
-                    if loop.selected_goal and self.get_current_average_weight_diff(loop) > 0.75:
+                    #if loop.selected_goal and self.get_current_average_weight_diff(loop) > 0.75:
+                    if loop.selected_goal and loop.expected_reward_over_time[loop.selected_goal][-1] > 0.5:
                         if loop.training: 
                             self.training_goal_idx += 1
                         map = self.calculate_goal_action_mapping(loop.weights_over_time, loop.goals.index(loop.selected_goal))

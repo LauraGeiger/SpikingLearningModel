@@ -22,6 +22,7 @@ library(readxl)
 library(dplyr)
 library(purrr)
 library(stringr)
+library(scales)
 
 # Base folder path
 base_path <- "../Data/Experiments/02_Grasping"
@@ -41,6 +42,7 @@ exp_numbers <- sprintf("%03d", cylinder_numbers)
 ```{r}
 sheet_names_motorloop <- c("reward_over_time", "expected_reward_over_time", "dopamine_over_time", "activation_over_time")
 sheet_names_motorlearning <- c("sensor_flex_over_time", "sensor_touch_grasp_over_time", "sensor_touch_hold_over_time", "feedback_over_time")
+sheet_names_cerebellum <- c("error_over_time", "correction_over_time")
 
 # Function to safely load one experiment
 load_motorloop_data <- function(exp_num, sheets) {
@@ -74,9 +76,26 @@ load_motorlearning_data <- function(exp_num, sheets) {
   exp_data
 }
 
+# Function to safely load one experiment
+load_cerebellum_data <- function(exp_num, sheets) {
+  exp_path <- file.path(base_path, exp_num)
+  file <- list.files(exp_path, pattern = "Cerebellum\\.xlsx$", full.names = TRUE)[1]
+  
+  if (length(file) == 0) {
+    warning(paste("No Cerebellum.xlsx found for experiment", exp_num))
+    return(NULL)
+  }
+  
+  # Dynamically read all sheets
+  exp_data <- map(sheets, ~ read_excel(file, sheet = .x) %>% mutate(iteration = time / 100))
+  names(exp_data) <- sheets
+  exp_data
+}
+
 # Load all experiments into a named list
 motorlearning_data <- set_names(map(exp_numbers, ~ load_motorlearning_data(.x, sheet_names_motorlearning)), exp_numbers)
 motorloop_data <- set_names(map(exp_numbers, ~ load_motorloop_data(.x, sheet_names_motorloop)), exp_numbers)
+cerebellum_data <- set_names(map(exp_numbers, ~ safely(load_cerebellum_data)(.x, sheet_names_cerebellum)$result), exp_numbers) %>% compact()
 ```
 
 ```{r}
@@ -100,6 +119,15 @@ motorlearning_data <- map2(motorlearning_data, motorloop_data, function(learn_ex
   learn_exp
 })
 
+# Copy detected goals into cerebellum_data (if available)
+common_exps <- intersect(names(cerebellum_data), names(motorloop_data))
+cerebellum_data <- map2(cerebellum_data[common_exps], motorloop_data[common_exps], function(cerebellum_exp, loop_exp) {
+  if (!is.null(loop_exp$goal)) {
+    cerebellum_exp$goal <- loop_exp$goal
+  }
+  cerebellum_exp
+})
+
 ```
 
 ```{r}
@@ -107,7 +135,7 @@ extract_common_info <- function(df, exp_num, sheet_name, sheet_names, grasping_d
   # Get metadata from grasping_data
   meta <- grasping_data %>%
     filter(Number == as.numeric(exp_num)) %>%
-    select(`Object shape`, `Object size (mm)`, `Weight (g)`, `Model type`) %>%
+    select(`Object shape`, `Object size (mm)`, `Weight (g)`, `Model type`, `Grasp type`, `Flexion Threshold`, `Touch Threshold`, `Drop Threshold`, `Overload Threshold`, `Update thumb opposition duration`, `Update thumb flexion duration`) %>%
     slice(1)  # ensure a single row
   
   df %>%
@@ -128,7 +156,14 @@ extract_common_info <- function(df, exp_num, sheet_name, sheet_names, grasping_d
       `Object shape` = meta$`Object shape`,
       `Object size (mm)` = meta$`Object size (mm)`,
       `Weight (g)` = meta$`Weight (g)`,
-      `Model type` = meta$`Model type`
+      `Model type` = meta$`Model type`,
+      `Grasp type` = meta$`Grasp type`,
+      `Flexion Threshold` = meta$`Flexion Threshold`,
+      `Touch Threshold` = meta$`Touch Threshold`,
+      `Drop Threshold` = meta$`Drop Threshold`,
+      `Overload Threshold` = meta$`Overload Threshold`,
+      `Update thumb opposition duration` = meta$`Update thumb opposition duration`,
+      `Update thumb flexion duration` = meta$`Update thumb flexion duration`
     )
 }
 
@@ -165,16 +200,37 @@ extract_motorlearning_data <- function(experiments, sheet_names, grasping_data) 
       goal_col <- exp$goal
       if (is.null(df)) return(NULL)
       
-      sensor_cols <- intersect(c("0", "1", "2", "3"), names(df))
-      if (length(sensor_cols) == 0) return(NULL)
+      # --- handle feedback sheet separately ---
+      if (sheet_name == "feedback_over_time") {
+        feedback_cols <- intersect(c("grasp", "hold"), names(df))
+        if (length(feedback_cols) == 0) return(NULL)
+        
+        df_long <- df %>%
+          pivot_longer(
+            cols = all_of(feedback_cols),
+            names_to = "feedback_type", 
+            values_to = "value" 
+            ) %>% 
+          mutate(
+            sensor = feedback_type
+            ) %>% # unify column naming 
+          select(-feedback_type)
+      } else {
+        # --- default: sensor sheets with 0,1,2,3 ---
+        sensor_cols <- intersect(c("0", "1", "2", "3"), names(df))
+        if (length(sensor_cols) == 0) return(NULL)
+        
+        df_long <- df %>%
+          pivot_longer(
+            cols = all_of(sensor_cols),
+            names_to = "sensor",
+            values_to = "value"
+          )
+      }
       
-      df %>%
-        pivot_longer(
-          cols = all_of(sensor_cols),
-          names_to = "sensor",
-          values_to = "value"
-        ) %>%
-        mutate(goal = goal_col) %>% 
+      # Add goal and metadata
+      df_long %>%
+        mutate(goal = goal_col) %>%
         extract_common_info(exp_num, sheet_name, sheet_names, grasping_data)
     })
   })
@@ -182,97 +238,120 @@ extract_motorlearning_data <- function(experiments, sheet_names, grasping_data) 
 
 ```
 
+```{r}
+extract_cerebellum_data <- function(experiments, sheet_names, grasping_data) {
+  map_dfr(sheet_names, function(sheet_name) {
+    map_dfr(names(experiments), function(exp_num) {
+      exp <- experiments[[exp_num]]
+      df <- exp[[sheet_name]]
+      goal_col <- exp$goal
+      if (is.null(df)) return(NULL)
+      
+      sensor_cols <- intersect(c("0", "1", "2", "3"), names(df))
+      if (length(sensor_cols) == 0) return(NULL)
+      
+      df_long <- df %>%
+        pivot_longer(
+          cols = all_of(sensor_cols),
+          names_to = "sensor",
+          values_to = "value"
+        )
+    
+    # Add goal and metadata
+    df_long %>%
+      mutate(goal = goal_col) %>%
+      extract_common_info(exp_num, sheet_name, sheet_names, grasping_data)
+    })
+  })
+}
+
+```
 
 ```{r}
-all_data_performance <- extract_motorloop_data(motorloop_data, sheet_names_motorloop, grasping_data)
+all_data_BG <- extract_motorloop_data(motorloop_data, sheet_names_motorloop, grasping_data)
 all_data_sensor <- extract_motorlearning_data(motorlearning_data, sheet_names_motorlearning, grasping_data)
+all_data_CB <- extract_cerebellum_data(cerebellum_data, sheet_names_cerebellum, grasping_data)
+
+all_data_combined <- bind_rows(all_data_sensor, all_data_BG, all_data_CB)
+
 
 ```
 
 
 ```{r}
-ggplot(all_data_performance, aes(x = iteration, y = value, group = experiment, color = experiment, linetype = `Model type`, size = `Weight (g)`)) +
-  geom_line(alpha = 0.6, size = 1) +
-  facet_grid(goal ~ sheet_clean, scales = "fixed") +  # rows = goals, columns = sheets
+
+# ---- 1. Filter to model BG + 86g ----
+data_BG_86g <- all_data_combined %>%
+  filter(
+    `Model type` == "BG", `Weight (g)` == 86,
+    as.numeric(as.character(iteration)) >= 0,
+    as.numeric(as.character(iteration)) <= 50
+  )
+
+# ---- 2. Separate the feedback sheet and extract grasp/hold ----
+feedback_data <- data_BG_86g %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%  # select the two feedback types
+  mutate(sheet_clean = case_when(
+    sensor == "grasp" ~ "Grasp",
+    sensor == "hold"  ~ "Hold"
+  )) %>%
+  select(experiment, goal, `Grasp type`, iteration, sheet_clean, value)
+
+# ---- 3. Extract activation and reward ----
+performance_data <- data_BG_86g %>%
+  filter(sheet_clean %in% c("Activation", "Reward")) %>%
+  select(experiment, goal, `Grasp type`, iteration, sheet_clean, value)
+
+# ---- 4. Combine both sources ----
+plot_data <- bind_rows(performance_data, feedback_data)
+
+# ---- 5. Compute percentage correct ----
+performance_summary <- plot_data %>%
+  group_by(experiment, goal, `Grasp type`, sheet_clean) %>%
+  summarise(
+    total = sum(!is.na(value)),                              
+    correct = sum(value == 1, na.rm = TRUE),    # count of 1s
+    percent = 100 * correct / total,
+    .groups = "drop") %>% 
+  mutate(label = paste0(`Grasp type`, " | ", goal))
+
+# ---- 6. Clean labels ----
+performance_summary <- performance_summary %>%
+  mutate(
+    sheet_clean = recode(sheet_clean,
+      "grasp" = "Grasp Feedback",
+      "hold" = "Hold Feedback"
+    ), 
+    sheet_clean = factor(
+      sheet_clean, 
+      levels = c("Activation", "Reward", "Grasp", "Hold"),
+      labels = c("Correct\nActivation", "Model\nReward", "Grasp\nSuccess", "Hold\nSuccess")
+    )
+  )
+
+# ---- 7. Plot ----
+ggplot(performance_summary, aes(x = sheet_clean, y = percent, color = label)) +
+  geom_jitter(width = 0.1, height = 0, size = 3, alpha = 0.8) +
   labs(
-    x = "Iteration",
-    y = "Value",
-    color = "Experiment"
+    x = NULL,
+    y = "Percentage",
+    color = "Grasp Goal | Joint Goal"
   ) +
-  scale_x_continuous(
-    breaks = seq(0, max(all_data_performance$iteration), by = 20)  # show every 20 iterations
-  ) +
-  scale_y_continuous(
-    breaks = scales::pretty_breaks(n = 3)   # 3 ticks on y-axis
-  )+
   theme_minimal(base_size = 14) +
   theme(
-    axis.text.x = element_text( hjust = 1),
-    legend.position = "right"
+    legend.position = "right",
+    panel.spacing = unit(1, "lines"),
+    strip.text = element_text(size = 12, face = "bold")
   )
 
 ```
 
 ```{r}
-performance_summary <- all_data_performance %>%
-  group_by(experiment, goal, `Model type`, `Weight (g)`, sheet_clean) %>%
-  summarise(
-    percent = 100 * mean(value == 1, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
+sensor_data <- data_BG_86g %>%
+  filter(sheet_clean %in% c("Sensor Flex")) %>%
   mutate(
-    metric = case_when(
-      sheet_clean == "Activation" ~ "Correct Activation",
-      sheet_clean == "Reward"     ~ "Model Reward",
-      TRUE ~ "Other"
-    )
-  ) %>%
-  filter(metric != "Other")
-
-
-ggplot(performance_summary, aes(x = goal, y = percent)) +
-  geom_jitter(aes(
-    shape = `Model type`,
-    color = factor(`Weight (g)`)
-  ), width = 0.1, height = 0, size = 2, alpha = 0.8) +
-  facet_wrap(~ metric, nrow = 1) +
-  labs(
-    x = "Goal",
-    y = "Percentage",
-    color = "Weight (g)",
-    shape = "Model Type"
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(legend.position = "right")
-
-```
-
-
-```{r}
-
-
-# Convert all sensor columns into long format
-all_data_sensor_long <- all_data_sensor %>%
-  pivot_longer(
-    cols = c("0","1","2","3"),  # all sensor columns
-    names_to = "sensor",        # new column for sensor name
-    values_to = "value"         # new column for sensor value
-  )
-
-```
-
-
-
-```{r}
-flex_data_long <- all_data_sensor_long %>%
-  filter(sheet_clean == "Sensor Flex") %>%
-  group_by(goal) %>%
-  mutate(
-    experiment_label = paste0("#", dense_rank(as.numeric(experiment)))
-  ) %>%
-  ungroup() %>% 
-  mutate(
-    facet_label = goal,
+    label = paste0(`Grasp type`, " | ", goal),
     sensor = factor(sensor,
       levels = sort(unique(sensor)),
       labels = c(
@@ -284,110 +363,1220 @@ flex_data_long <- all_data_sensor_long %>%
     )
   )
 
-ggplot(flex_data_long, aes(x = iteration, y = value, color = sensor, group = sensor)) +
-  geom_line(size = 1, alpha = 0.7) +
+
+ggplot(sensor_data, aes(x = iteration, y = value, color = sensor, group = interaction(experiment, label, sensor))) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
   geom_hline(yintercept = 30, linetype = "dashed", color = "black", size = 0.8) +
-  facet_grid(experiment_label ~ goal, scales = "fixed") +
+  facet_wrap(~ label, scales = "fixed") +  # one facet per sensor
   labs(
     x = "Iteration",
-    y = "Value during Grasping",
+    y = "Value",
     color = "Flex Sensor"
   ) +
   scale_x_continuous(
-    breaks = seq(0, max(all_data$iteration), by = 20)  # show every 20 iterations
+    breaks = seq(0, max(sensor_data$iteration), by = 20)  # show every 20 iterations
   ) +
   theme_minimal(base_size = 14) +
   theme(
-    strip.text.y.right = element_text(angle = 0),
-    axis.text.x = element_text(hjust = 1),
-    legend.position = "right"
+    aspect.ratio = 0.6, # makes plot shorter vertically
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+```{r}
+# ---- 1. Filter to model BG and BG+CB + grasp type A ----
+data_A <- all_data_combined %>%
+  filter(
+    `Grasp type` == "A",
+    (`Model type` == "BG") | (`Model type` == "BG+CB" & `Overload Threshold` == 100),
+    as.numeric(as.character(iteration)) >= 0,
+    as.numeric(as.character(iteration)) <= 50
+  )
+
+# ---- 2. Separate the feedback sheet and extract grasp/hold ----
+feedback_data <- data_A %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%  # select the two feedback types
+  mutate(sheet_clean = case_when(
+    sensor == "grasp" ~ "Grasp",
+    sensor == "hold"  ~ "Hold"
+  )) %>%
+  select(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, iteration, sheet_clean, value)
+
+# ---- 3. Extract activation and reward ----
+performance_data <- data_A %>%
+  filter(sheet_clean %in% c("Activation", "Reward")) %>%
+  select(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, iteration, sheet_clean, value)
+
+# ---- 4. Combine both sources ----
+plot_data <- bind_rows(performance_data, feedback_data)
+
+# ---- 5. Compute percentage correct ----
+performance_summary <- plot_data %>%
+  group_by(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, sheet_clean) %>%
+  summarise(
+    total = sum(!is.na(value)), 
+    correct = sum(value == 1, na.rm = TRUE),    # count of 1s
+    percent = 100 * correct / total, 
+    .groups = "drop") %>% 
+  mutate(label = paste0(`Grasp type`, " | ", goal))
+
+# ---- 6. Clean labels ----
+performance_summary <- performance_summary %>%
+  mutate(
+    sheet_clean = recode(sheet_clean,
+      "grasp" = "Grasp Feedback",
+      "hold" = "Hold Feedback"
+    ), 
+    sheet_clean = factor(
+      sheet_clean, 
+      levels = c("Activation", "Reward", "Grasp", "Hold"),
+      labels = c("Correct\nActivation", "Motor Loop\nReward", "Grasp\nSuccess", "Hold\nSuccess")
+    )
+  )
+
+# ---- 1. Compute mean percent per Model type for each Weight and sheet ----
+mean_performance <- performance_summary %>%
+  group_by(`Weight (g)`, sheet_clean, `Model type`) %>%
+  summarise(mean_percent = mean(percent, na.rm = TRUE), .groups = "drop")
+
+# ---- 2. Calculate improvement: BG+CB compared to BG ----
+improvement <- mean_performance %>%
+  pivot_wider(
+    names_from = `Model type`,
+    values_from = mean_percent
+  ) %>%
+  mutate(improvement = `BG+CB` - BG) %>%   # BG+CB minus BG
+  mutate(improvement_label = paste0(ifelse(improvement >= 0, "+", ""), round(improvement, 0)))
+
+# ---- 3. Add y position for the label (top of plot) ----
+# Choose slightly above the max percent for each Weight and sheet
+label_positions <- performance_summary %>%
+  group_by(`Weight (g)`, sheet_clean) %>%
+  summarise(ypos = max(percent, na.rm = TRUE) + 5, .groups = "drop") %>%
+  left_join(improvement, by = c("Weight (g)", "sheet_clean"))
+
+# ---- 7. Plot ----
+ggplot(performance_summary, aes(x = factor(`Weight (g)`), y = percent, color = `Model type`, shape = label)) +
+  geom_jitter(width = 0.1, height = 0, size = 3, alpha = 0.8) +
+  facet_wrap( ~ sheet_clean, nrow = 1, scales = "fixed") +  # one facet per sensor
+  labs(
+    x = "Object Weight (g)",
+    y = "Percentage",
+    color = "Model Type",
+    shape = "Grasp Goal | Joint Goal"
+  ) +
+  geom_text(
+    data = label_positions,
+    aes(x = factor(`Weight (g)`), y = ypos, label = improvement_label),
+    inherit.aes = FALSE,
+    color = scales::hue_pal()(2)[2],
+    size = 3,
+    vjust = 0
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.spacing = unit(0.9, "lines"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+```
+
+
+
+```{r}
+
+sensor_data_touch <- data_A %>%
+  filter(sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold")) %>%
+  filter(sensor != "2") %>% # filter out middle finger sensor data
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sensor = case_when(
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "0" ~ "1",
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "1" ~ "2",
+      TRUE ~ sensor  # keep all other values unchanged
+    ),
+    sheet_clean = factor(
+      sheet_clean,
+      levels = c("Sensor Touch Grasp", "Sensor Touch Hold"),
+      labels = c("Grasp", "Hold")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb", "Index Finger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    )
+  )
+
+hline_df <- tibble(
+  sheet_clean = c("Grasp", "Hold"),
+  yintercept = c(8, -5)
+)
+
+n_sensors <- length(unique(sensor_data_touch$sensor))
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+# --- Extract feedback data for the same subset ---
+feedback_data <- data_A %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%
+  mutate(
+    sheet_clean = case_when(
+      sensor == "grasp" ~ "Grasp",
+      sensor == "hold"  ~ "Hold"
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    )
+  ) %>%
+  select(experiment, iteration, `Model type`, `Weight (g)`, sheet_clean, value)
+
+# ---- prepare shaded regions ----
+feedback_regions <- feedback_data %>%
+  filter(sheet_clean %in% c("Grasp", "Hold")) %>%
+  left_join(hline_df, by = "sheet_clean") %>%
+  mutate(
+    status = ifelse(value == 1, "Success", "Failure"),
+    ymin = ifelse(status == "Success", yintercept, -Inf),
+    ymax = ifelse(status == "Success", Inf, yintercept)
+  )
+
+ggplot(sensor_data_touch, aes(x = iteration, y = value, color = sensor, group = interaction(experiment, label, sensor))) +
+  # shaded background regions
+  geom_rect(
+    data = feedback_regions,
+    aes(
+      xmin = iteration - 0.5, xmax = iteration + 0.5,  # small window around each iteration
+      ymin = ymin, ymax = ymax,
+      fill = status
+    ),
+    inherit.aes = FALSE, alpha = 0.15
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sheet_clean ~ `Model type` ~ `Weight (g)`, scales = "free_y") +  # one facet per sensor
+  labs(
+    x = "Iteration",
+    y = "Value",
+    color = "Touch Sensor"
+  ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Observation",
+    values = c("Failure" = "red", "Success" = "green"),
+    labels = c("Unsuccessful", "Successful"),
+    na.translate = FALSE  # removes NA from legend
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(sensor_data_touch$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+```{r}
+cerebellum_data <- data_A %>%
+  filter(`Model type` == "BG+CB") %>%
+  filter(sheet_clean %in% c("Error", "Correction")) %>%
+  filter(sensor != "0") %>% # filter out thumb opposition data
+  filter(sensor != "3") %>% # filter out middle finger data
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sheet_clean = factor(sheet_clean, levels = c("Error", "Correction")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb", "Index Finger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    ) 
+  )
+
+error_data <- cerebellum_data %>% filter(sheet_clean == "Error")
+correction_data <- cerebellum_data %>% filter(sheet_clean == "Correction") %>%
+  mutate(value = value * 10)
+
+
+error_regions <- error_data %>%
+  mutate(
+    fill = case_when(
+      value == 1  ~ "Grip Defizit",
+      value == -1 ~ "Grip Overforce",
+      TRUE        ~ NA_character_
+    ),
+    ymin = case_when(
+      value == 1  ~ 0,  
+      value == -1 ~ -Inf, 
+      TRUE        ~ NA_real_
+    ),
+    ymax = case_when(
+      value == 1  ~ Inf,
+      value == -1 ~ 0,
+      TRUE        ~ NA_real_
+    )
+  )
+
+hline_df <- tibble(
+  sheet_clean = "Correction",
+  yintercept = c(-10, 10) * 10
+)
+
+n_sensors <- length(unique(cerebellum_data$sensor))
+
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+ggplot(correction_data, aes(x = iteration, y = value, color = sheet_clean, group = interaction(experiment, label, sheet_clean, sensor))) +
+  geom_rect( # Shaded Error background
+    data = error_regions,
+    aes(xmin = iteration - 0.5, xmax = iteration + 0.5, ymin = ymin, ymax = ymax, fill = fill),
+    inherit.aes = FALSE,
+    alpha = 0.2
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sensor ~ factor(`Weight (g)`), scales = "free_y") +  # one facet per sensor
+  labs(
+    x = "Iteration",
+    y = "Change in Actuator Duration (ms)",
+    color = NULL
+  ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Error",
+    values = c("Grip Defizit" = "red", "Grip Overforce" = "blue"),
+    na.translate = FALSE
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(correction_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+
+```{r}
+
+sensor_data_flex <- data_A %>%
+  filter(sheet_clean %in% c("Sensor Flex")) %>%
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sensor = factor(sensor,
+      levels = sort(unique(sensor)),
+      labels = c(
+        "Thumb Opposition",
+        "Thumb Flexion",
+        "Index Finger Flexion",
+        "Middle Finger Flexion"
+      )
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    )
+  ) #%>%
+  #select(experiment, iteration, `Model type`, `Weight (g)`, sheet_clean, value)
+
+ggplot(sensor_data_flex, aes(x = iteration, y = value, color = sensor, group = interaction(experiment, label, sensor))) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(yintercept = 30, linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(`Model type` ~ factor(`Weight (g)`), scales = "fixed") +  # one facet per sensor
+  labs(
+    x = "Iteration",
+    y = "Value",
+    color = "Flex Sensor"
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(sensor_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    aspect.ratio = 1, # makes plot shorter vertically
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+
+```{r}
+# ---- 1. Filter to model BG and BG+CB + grasp type B ----
+data_B <- all_data_combined %>%
+  filter(
+    `Grasp type` == "B",
+    (`Update thumb opposition duration` == "yes") & (`Update thumb flexion duration` == "yes"),
+    as.numeric(as.character(iteration)) >= 0,
+    as.numeric(as.character(iteration)) <= 50
+  )
+
+# ---- 2. Separate the feedback sheet and extract grasp/hold ----
+feedback_data <- data_B %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%  # select the two feedback types
+  mutate(sheet_clean = case_when(
+    sensor == "grasp" ~ "Grasp",
+    sensor == "hold"  ~ "Hold"
+  )) %>%
+  select(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, iteration, sheet_clean, value)
+
+# ---- 3. Extract activation and reward ----
+performance_data <- data_B %>%
+  filter(sheet_clean %in% c("Activation", "Reward")) %>%
+  select(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, iteration, sheet_clean, value)
+
+# ---- 4. Combine both sources ----
+plot_data <- bind_rows(performance_data, feedback_data)
+
+# ---- 5. Compute percentage correct ----
+performance_summary <- plot_data %>%
+  group_by(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, sheet_clean) %>%
+  summarise(
+    total = sum(!is.na(value)), 
+    correct = sum(value == 1, na.rm = TRUE),    # count of 1s
+    percent = 100 * correct / total, 
+    .groups = "drop") %>% 
+  mutate(label = paste0(`Grasp type`, " | ", goal))
+
+# ---- 6. Clean labels ----
+performance_summary <- performance_summary %>%
+  mutate(
+    sheet_clean = recode(sheet_clean,
+      "grasp" = "Grasp Feedback",
+      "hold" = "Hold Feedback"
+    ), 
+    sheet_clean = factor(
+      sheet_clean, 
+      levels = c("Activation", "Reward", "Grasp", "Hold"),
+      labels = c("Correct\nActivation", "Motor Loop\nReward", "Grasp\nSuccess", "Hold\nSuccess")
+    )
+  )
+
+# ---- 1. Compute mean percent per Model type for each Weight and sheet ----
+mean_performance <- performance_summary %>%
+  group_by(`Weight (g)`, sheet_clean, `Model type`) %>%
+  summarise(mean_percent = mean(percent, na.rm = TRUE), .groups = "drop")
+
+# ---- 2. Calculate improvement: BG+CB compared to BG ----
+improvement <- mean_performance %>%
+  pivot_wider(
+    names_from = `Model type`,
+    values_from = mean_percent
+  ) %>%
+  mutate(improvement = `BG+CB` - BG) %>%   # BG+CB minus BG
+  mutate(improvement_label = paste0(ifelse(improvement >= 0, "+", ""), round(improvement, 0)))
+
+# ---- 3. Add y position for the label (top of plot) ----
+# Choose slightly above the max percent for each Weight and sheet
+label_positions <- performance_summary %>%
+  group_by(`Weight (g)`, sheet_clean) %>%
+  summarise(ypos = max(percent, na.rm = TRUE) + 5, .groups = "drop") %>%
+  left_join(improvement, by = c("Weight (g)", "sheet_clean"))
+
+# ---- 7. Plot ----
+ggplot(performance_summary, aes(x = factor(`Weight (g)`), y = percent, color = `Model type`, shape = label)) +
+  geom_jitter(width = 0.1, height = 0, size = 3, alpha = 0.8) +
+  facet_wrap( ~ sheet_clean, nrow = 1, scales = "fixed") +  # one facet per sensor
+  labs(
+    x = "Object Weight (g)",
+    y = "Percentage",
+    color = "Model Type",
+    shape = "Grasp Goal | Joint Goal"
+  ) +
+  geom_text(
+    data = label_positions,
+    aes(x = factor(`Weight (g)`), y = ypos, label = improvement_label),
+    inherit.aes = FALSE,
+    color = scales::hue_pal()(2)[2],
+    size = 3,
+    vjust = 0
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.spacing = unit(0.9, "lines"),
+    strip.text = element_text(size = 12, face = "bold")
   )
 
 ```
 
 ```{r}
-touch_data_grasp_long <- all_data_sensor_long %>%
-  filter(sheet_clean == "Sensor Touch Grasp") %>%
-  filter(sensor != "3") %>% # Remove rows where sensor == 3
-  group_by(goal) %>%
+
+sensor_data <- data_B %>%
+  filter(sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold")) %>%
+  filter(sensor != "2") %>% # filter out middle finger sensor data
   mutate(
-    experiment_label = paste0("#", dense_rank(as.numeric(experiment)))
-  ) %>%
-  ungroup() %>% 
-  mutate(
-    facet_label = goal,
-    sensor = factor(sensor,
+    label = paste0(`Grasp type`, " | ", goal),
+    sensor = case_when(
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "0" ~ "1",
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "1" ~ "2",
+      TRUE ~ sensor  # keep all other values unchanged
+    ),
+    sheet_clean = factor(
+      sheet_clean,
+      levels = c("Sensor Touch Grasp", "Sensor Touch Hold"),
+      labels = c("Grasp", "Hold")),
+    sensor = factor(
+      sensor,
       levels = sort(unique(sensor)),
-      labels = c(
-        "Thumb",
-        "Index Finger",
-        "Middle Finger"
-      )
+      labels = c("Thumb", "Index Finger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
     )
   )
 
-ggplot(touch_data_grasp_long, aes(x = iteration, y = value, color = sensor, group = sensor)) +
-  geom_line(size = 1, alpha = 0.7) +
-  geom_hline(yintercept = 8, linetype = "dashed", color = "black", size = 0.8) +
-  geom_hline(yintercept = 25, linetype = "dashed", color = "black", size = 0.8) +
-  facet_grid(experiment_label ~ goal, scales = "fixed") +
+hline_df <- tibble(
+  sheet_clean = c("Grasp", "Hold"),
+  yintercept = c(8, -5)
+)
+
+overload_hlines <- tibble(
+  sheet_clean = "Grasp",
+  `Model type` = "BG+CB",
+  `Overload Threshold` = unique(na.omit(sensor_data$`Overload Threshold`)),
+  yintercept = as.numeric(unique(na.omit(sensor_data$`Overload Threshold`)))
+)
+
+n_sensors <- length(unique(sensor_data$sensor))
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+# --- Extract feedback data for the same subset ---
+feedback_data <- data_B %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%
+  mutate(
+    sheet_clean = case_when(
+      sensor == "grasp" ~ "Grasp",
+      sensor == "hold"  ~ "Hold"
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    )
+  ) %>%
+  select(experiment, iteration, `Model type`, `Weight (g)`, sheet_clean, value)
+
+# ---- prepare shaded regions ----
+feedback_regions <- feedback_data %>%
+  filter(sheet_clean %in% c("Grasp", "Hold")) %>%
+  left_join(hline_df, by = "sheet_clean") %>%
+  mutate(
+    status = ifelse(value == 1, "Success", "Failure"),
+    ymin = ifelse(status == "Success", yintercept, -Inf),
+    ymax = ifelse(status == "Success", Inf, yintercept)
+  )
+
+ggplot(sensor_data, aes(x = iteration, y = value, color = sensor, group = interaction(experiment, label, sensor))) +
+  # shaded background regions
+  geom_rect(
+    data = feedback_regions,
+    aes(
+      xmin = iteration - 0.5, xmax = iteration + 0.5,  # small window around each iteration
+      ymin = ymin, ymax = ymax,
+      fill = status
+    ),
+    inherit.aes = FALSE, alpha = 0.15
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  geom_hline(data = overload_hlines, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sheet_clean ~ `Model type` ~ factor(`Weight (g)`), scales = "free_y") +  # one facet per sensor
   labs(
     x = "Iteration",
-    y = "Value during Grasping",
+    y = "Value",
     color = "Touch Sensor"
   ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Observation",
+    values = c("Failure" = "red", "Success" = "green"),
+    labels = c("Unsuccessful", "Successful"),
+    na.translate = FALSE  # removes NA from legend
+  ) +
   scale_x_continuous(
-    breaks = seq(0, max(all_data$iteration), by = 20)  # show every 20 iterations
+    breaks = seq(0, max(sensor_data$iteration), by = 20)  # show every 20 iterations
   ) +
   theme_minimal(base_size = 14) +
   theme(
-    strip.text.y.right = element_text(angle = 0),
-    axis.text.x = element_text(hjust = 1),
-    legend.position = "right"
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+
+
+```{r}
+cerebellum_data <- data_B %>%
+  filter(`Model type` == "BG+CB") %>%
+  filter(sheet_clean %in% c("Error", "Correction")) %>%
+  #filter(sensor != "0") %>% # filter out middle thumb opposition data
+  filter(sensor != "3") %>% # filter out middle finger data
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sheet_clean = factor(sheet_clean, levels = c("Error", "Correction")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb Opp.", "Thumb", "Index Finger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    ) 
   )
 
+error_data <- cerebellum_data %>% filter(sheet_clean == "Error")
+correction_data <- cerebellum_data %>% filter(sheet_clean == "Correction") %>%
+  mutate(value = value * 10)
+
+
+error_regions <- error_data %>%
+  mutate(
+    fill = case_when(
+      value == 1  ~ "Grip Defizit",
+      value == -1 ~ "Grip Overforce",
+      TRUE        ~ NA_character_
+    ),
+    ymin = case_when(
+      value == 1  ~ 0,  
+      value == -1 ~ -Inf, 
+      TRUE        ~ NA_real_
+    ),
+    ymax = case_when(
+      value == 1  ~ Inf,
+      value == -1 ~ 0,
+      TRUE        ~ NA_real_
+    )
+  )
+
+hline_df <- tibble(
+  sheet_clean = "Correction",
+  yintercept = c(-10, 10) * 10
+)
+
+n_sensors <- length(unique(cerebellum_data$sensor))
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+ggplot(correction_data, aes(x = iteration, y = value, color = sheet_clean, group = interaction(experiment, label, sheet_clean, sensor))) +
+  geom_rect( # Shaded Error background
+    data = error_regions,
+    aes(xmin = iteration - 0.5, xmax = iteration + 0.5, ymin = ymin, ymax = ymax, fill = fill),
+    inherit.aes = FALSE,
+    alpha = 0.2
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sensor ~ `Weight (g)`, scales = "fixed") +  # one facet per sensor
+  labs(
+    x = "Iteration",
+    y = "Change in Actuator Duration (ms)",
+    color = NULL
+  ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Error",
+    values = c("Grip Defizit" = "red", "Grip Overforce" = "blue"),
+    na.translate = FALSE
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(correction_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
 ```
 
 ```{r}
-touch_data_hold_long <- all_data_sensor_long %>%
-  filter(sheet_clean == "Sensor Touch Hold") %>%
-  filter(sensor != "3") %>% # Remove rows where sensor == 3
-  group_by(goal) %>%
+
+sensor_data_flex <- data_B %>%
+  filter(sheet_clean %in% c("Sensor Flex")) %>%
   mutate(
-    experiment_label = paste0("#", dense_rank(as.numeric(experiment)))
-  ) %>%
-  ungroup() %>% 
-  mutate(
-    facet_label = goal,
+    label = paste0(`Grasp type`, " | ", goal),
     sensor = factor(sensor,
       levels = sort(unique(sensor)),
       labels = c(
-        "Thumb",
-        "Index Finger",
-        "Middle Finger"
+        "Thumb Opposition",
+        "Thumb Flexion",
+        "Index Finger Flexion",
+        "Middle Finger Flexion"
       )
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
     )
-  )
+  ) #%>%
+  #select(experiment, iteration, `Model type`, `Weight (g)`, sheet_clean, value)
 
-ggplot(touch_data_hold_long, aes(x = iteration, y = value, color = sensor, group = sensor)) +
-  geom_line(size = 1, alpha = 0.7) +
-  geom_hline(yintercept = -5, linetype = "dashed", color = "black", size = 0.8) +
-  facet_grid(experiment_label ~ goal, scales = "fixed") +
+ggplot(sensor_data_flex, aes(x = iteration, y = value, color = sensor, group = interaction(experiment, label, sensor))) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(yintercept = 30, linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(`Model type` ~ factor(`Weight (g)`), scales = "fixed") +  # one facet per sensor
   labs(
     x = "Iteration",
-    y = "Value during Holding",
-    color = "Touch Sensor"
+    y = "Value",
+    color = "Flex Sensor"
   ) +
   scale_x_continuous(
-    breaks = seq(0, max(all_data$iteration), by = 20)  # show every 20 iterations
+    breaks = seq(0, max(sensor_data$iteration), by = 20)  # show every 20 iterations
   ) +
   theme_minimal(base_size = 14) +
   theme(
-    strip.text.y.right = element_text(angle = 0),
-    axis.text.x = element_text(hjust = 1),
-    legend.position = "right"
+    aspect.ratio = 1, # makes plot shorter vertically
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+```{r}
+data_overload_th <- all_data_combined %>%
+  filter(
+    (experiment == "011") | (experiment == "015"),
+    as.numeric(as.character(iteration)) >= 0,
+    as.numeric(as.character(iteration)) <= 50
   )
 
+sensor_data <- data_overload_th %>%
+  filter(sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold")) %>%
+  filter(sensor != "2") %>% # filter out middle finger sensor data
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sensor = case_when(
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "0" ~ "1",
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "1" ~ "2",
+      TRUE ~ sensor  # keep all other values unchanged
+    ),
+    sheet_clean = factor(
+      sheet_clean,
+      levels = c("Sensor Touch Grasp", "Sensor Touch Hold"),
+      labels = c("Grasp", "Hold")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb", "Index Finger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    )
+  )
+
+grasp_hlines <- tibble(
+  sheet_clean = "Grasp",
+  `Overload Threshold` = unique(sensor_data$`Overload Threshold`),
+  yintercept = 8,
+)
+
+hold_hlines <- tibble(
+  sheet_clean = "Hold",
+  `Overload Threshold` = unique(sensor_data$`Overload Threshold`),
+  yintercept = -5,
+)
+hline_df <- bind_rows(grasp_hlines, hold_hlines)
+
+overload_hlines <- tibble(
+  sheet_clean = "Grasp",
+  `Overload Threshold` = unique(sensor_data$`Overload Threshold`)[2], # only for the second value (25)
+  yintercept = as.numeric(unique(sensor_data$`Overload Threshold`)[2])
+)
+
+n_sensors <- length(unique(sensor_data$sensor))
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+# --- Extract feedback data for the same subset ---
+feedback_data <- data_overload_th %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%
+  mutate(
+    sheet_clean = case_when(
+      sensor == "grasp" ~ "Grasp",
+      sensor == "hold"  ~ "Hold"
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    )
+  ) %>%
+  select(experiment, iteration, `Overload Threshold`, sheet_clean, value)
+
+# ---- prepare shaded regions ----
+feedback_regions <- feedback_data %>%
+  filter(sheet_clean %in% c("Grasp", "Hold")) %>%
+  left_join(hline_df, by = c("sheet_clean", "Overload Threshold")) %>%
+  mutate(
+    status = ifelse(value == 1, "Success", "Failure"),
+    ymin = ifelse(status == "Success", yintercept, -Inf),
+    ymax = ifelse(status == "Success", Inf, yintercept)
+  )
+
+ggplot(sensor_data, aes(x = iteration, y = value, color = sensor, group = interaction(experiment, label, sensor))) +
+  # shaded background regions
+  geom_rect(
+    data = feedback_regions,
+    aes(
+      xmin = iteration - 0.5, xmax = iteration + 0.5,  # small window around each iteration
+      ymin = ymin, ymax = ymax,
+      fill = status
+    ),
+    inherit.aes = FALSE, alpha = 0.15
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  geom_hline(data = overload_hlines, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sheet_clean ~ `Model type` ~ `Overload Threshold`, scales = "free_y") +  # one facet per sensor
+  labs(
+    x = "Iteration",
+    y = "Value",
+    color = "Touch Sensor"
+  ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Observation",
+    values = c("Failure" = "red", "Success" = "green"),
+    labels = c("Unsuccessful", "Successful"),
+    na.translate = FALSE  # removes NA from legend
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(sensor_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
 ```
- 
+
+
+```{r}
+
+cerebellum_data <- data_overload_th %>%
+  filter(`Model type` == "BG+CB") %>%
+  filter(sheet_clean %in% c("Error", "Correction")) %>%
+  filter(sensor != "0") %>% # filter out thumb opposition data
+  filter(sensor != "3") %>% # filter out middle finger data
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sheet_clean = factor(sheet_clean, levels = c("Error", "Correction")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb", "Index Finger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    ) 
+  )
+
+error_data <- cerebellum_data %>% filter(sheet_clean == "Error")
+correction_data <- cerebellum_data %>% filter(sheet_clean == "Correction") %>%
+  mutate(value = value * 10)
+
+
+error_regions <- error_data %>%
+  mutate(
+    fill = case_when(
+      value == 1  ~ "Grip Defizit",
+      value == -1 ~ "Grip Overforce",
+      TRUE        ~ NA_character_
+    ),
+    ymin = case_when(
+      value == 1  ~ 0,  
+      value == -1 ~ -Inf, 
+      TRUE        ~ NA_real_
+    ),
+    ymax = case_when(
+      value == 1  ~ Inf,
+      value == -1 ~ 0,
+      TRUE        ~ NA_real_
+    )
+  )
+
+hline_df <- tibble(
+  sheet_clean = "Correction",
+  yintercept = c(-10, 10) * 10
+)
+
+n_sensors <- length(unique(cerebellum_data$sensor))
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+ggplot(correction_data, aes(x = iteration, y = value, color = sheet_clean, group = interaction(experiment, label, sheet_clean, sensor))) +
+  geom_rect( # Shaded Error background
+    data = error_regions,
+    aes(xmin = iteration - 0.5, xmax = iteration + 0.5, ymin = ymin, ymax = ymax, fill = fill),
+    inherit.aes = FALSE,
+    alpha = 0.2
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sensor ~ `Overload Threshold`, scales = "fixed") +  # one facet per sensor
+  labs(
+    x = "Iteration",
+    y = "Change in Actuator Duration (ms)",
+    color = NULL
+  ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Error",
+    values = c("Grip Defizit" = "red", "Grip Overforce" = "blue"),
+    na.translate = FALSE
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(correction_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+```{r}
+data_update_duration_rule <- all_data_combined %>%
+  filter(
+    (experiment == "034") | (experiment == "035") | (experiment == "036") | (experiment == "037"),
+    as.numeric(as.character(iteration)) >= 0,
+    as.numeric(as.character(iteration)) <= 50
+  )
+
+# ---- 2. Separate the feedback sheet and extract grasp/hold ----
+feedback_data <- data_update_duration_rule %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%  # select the two feedback types
+  mutate(sheet_clean = case_when(
+    sensor == "grasp" ~ "Grasp",
+    sensor == "hold"  ~ "Hold"
+  )) %>%
+  select(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, `Update thumb opposition duration`, `Update thumb flexion duration`, iteration, sheet_clean, value)
+
+# ---- 3. Extract activation and reward ----
+performance_data <- data_update_duration_rule %>%
+  filter(sheet_clean %in% c("Activation", "Reward")) %>%
+  select(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, `Update thumb opposition duration`, `Update thumb flexion duration`, iteration, sheet_clean, value)
+
+# ---- 4. Combine both sources ----
+plot_data <- bind_rows(performance_data, feedback_data)
+
+# ---- 5. Compute percentage correct ----
+performance_summary <- plot_data %>%
+  group_by(experiment, goal, `Grasp type`, `Model type`, `Weight (g)`, `Update thumb opposition duration`, `Update thumb flexion duration`, sheet_clean) %>%
+  summarise(
+    total = sum(!is.na(value)), 
+    correct = sum(value == 1, na.rm = TRUE),    # count of 1s
+    percent = 100 * correct / total, 
+    .groups = "drop") %>% 
+  mutate(label = paste0(`Grasp type`, " | ", goal))
+
+# ---- 6. Clean labels ----
+performance_summary <- performance_summary %>%
+  mutate(
+    sheet_clean = recode(sheet_clean,
+      "grasp" = "Grasp Feedback",
+      "hold" = "Hold Feedback"
+    ), 
+    sheet_clean = factor(
+      sheet_clean, 
+      levels = c("Activation", "Reward", "Grasp", "Hold"),
+      labels = c("Correct\nActivation", "Motor Loop\nReward", "Grasp\nSuccess", "Hold\nSuccess")
+    )
+  )
+
+mean_performance <- performance_summary %>%
+  group_by(`Weight (g)`, sheet_clean, `Model type`, `Update thumb opposition duration`, `Update thumb flexion duration`,) %>%
+  summarise(mean_percent = mean(percent, na.rm = TRUE), .groups = "drop")
+
+
+ggplot(performance_summary, aes(x = factor(`Weight (g)`), y = percent, color = interaction(`Update thumb opposition duration`, `Update thumb flexion duration`), shape = label)) +
+  geom_jitter(width = 0.1, height = 0, size = 3, alpha = 0.8) +
+  facet_wrap( ~ sheet_clean, nrow = 1, scales = "fixed") +  # one facet per sensor
+  labs(
+    x = "Object Weight (g)",
+    y = "Percentage",
+    color = "Duration Update Rule",
+    shape = "Grasp Goal | Joint Goal"
+  ) +
+  scale_color_discrete(
+    labels = c(
+      "no.no"     = "\n001 — Thumb Opp. and\n             Flexion not Updated",
+      "yes.no"    = "\n101 — Thumb Flexion\n             not Updated",
+      "no.yes"    = "\n011 — Thumb Opp.\n             not Updated",
+      "yes.yes"   = "\n111 — All Actuators\n            Updated"
+    )
+  ) +
+  guides(color = guide_legend(reverse = TRUE)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.spacing = unit(0.2, "lines"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+```
+
+
+
+```{r}
+
+sensor_data <- data_update_duration_rule %>%
+  filter(sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold")) %>%
+  filter(sensor != "2") %>% # filter out middle finger sensor data
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sensor = case_when(
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "0" ~ "1",
+      sheet_clean %in% c("Sensor Touch Grasp", "Sensor Touch Hold") & sensor == "1" ~ "2",
+      TRUE ~ sensor  # keep all other values unchanged
+    ),
+    sheet_clean = factor(
+      sheet_clean,
+      levels = c("Sensor Touch Grasp", "Sensor Touch Hold"),
+      labels = c("Grasp", "Hold")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb", "Index Finger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    ),
+    duration_combo = case_when(
+      `Update thumb opposition duration` == "yes" & `Update thumb flexion duration` == "yes" ~ "111",
+      `Update thumb opposition duration` == "yes" & `Update thumb flexion duration` == "no"  ~ "101",
+      `Update thumb opposition duration` == "no"  & `Update thumb flexion duration` == "yes" ~ "011",
+      `Update thumb opposition duration` == "no"  & `Update thumb flexion duration` == "no"  ~ "001"
+    ),
+    duration_combo = factor(duration_combo, levels = c("111", "101", "011", "001"))
+  )
+
+hline_df <- tibble(
+  sheet_clean = c("Grasp", "Hold"),
+  yintercept = c(8, -5)
+)
+
+overload_hlines <- tibble(
+  sheet_clean = "Grasp",
+  `Overload Threshold` = unique(na.omit(sensor_data$`Overload Threshold`)),
+  yintercept = as.numeric(unique(na.omit(sensor_data$`Overload Threshold`)))
+)
+
+n_sensors <- length(unique(sensor_data$sensor))
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+unique(data_update_duration_rule$`Weight (g)`)
+
+# --- Extract feedback data for the same subset ---
+feedback_data <- data_update_duration_rule %>%
+  filter(sheet == "feedback_over_time") %>%
+  filter(sensor %in% c("grasp", "hold")) %>%
+  mutate(
+    sheet_clean = case_when(
+      sensor == "grasp" ~ "Grasp",
+      sensor == "hold"  ~ "Hold"
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    )
+  ) %>%
+  select(experiment, iteration, `Weight (g)`, sheet_clean, value)
+
+# ---- prepare shaded regions ----
+feedback_regions <- feedback_data %>%
+  filter(sheet_clean %in% c("Grasp", "Hold")) %>%
+  left_join(hline_df, by = "sheet_clean") %>%
+  mutate(
+    status = ifelse(value == 1, "Success", "Failure"),
+    ymin = ifelse(status == "Success", yintercept, -Inf),
+    ymax = ifelse(status == "Success", Inf, yintercept)
+  )
+
+feedback_regions <- feedback_regions %>%
+  left_join(
+    sensor_data %>%
+      distinct(experiment, duration_combo), 
+    by = "experiment"
+  )
+
+ggplot(sensor_data, aes(x = iteration, y = value, color = sensor, group = interaction(experiment, label, sensor))) +
+  # shaded background regions
+  geom_rect(
+    data = feedback_regions,
+    aes(
+      xmin = iteration - 0.5, xmax = iteration + 0.5,  # small window around each iteration
+      ymin = ymin, ymax = ymax,
+      fill = status
+    ),
+    inherit.aes = FALSE, alpha = 0.15
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  geom_hline(data = overload_hlines, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sheet_clean ~ `Weight (g)` ~ duration_combo, scales = "free_y") +
+  labs(
+    x = "Iteration",
+    y = "Value",
+    color = "Touch Sensor"
+  ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Observation",
+    values = c("Failure" = "red", "Success" = "green"),
+    labels = c("Unsuccessful", "Successful"),
+    na.translate = FALSE  # removes NA from legend
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(sensor_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
+
+
+
+
+
+```{r}
+cerebellum_data <- data_update_duration_rule %>%
+  filter(`Model type` == "BG+CB") %>%
+  filter(sheet_clean %in% c("Error", "Correction")) %>%
+  filter(sensor != "3") %>% # filter out middle finger data
+  mutate(
+    label = paste0(`Grasp type`, " | ", goal),
+    sheet_clean = factor(sheet_clean, levels = c("Error", "Correction")),
+    sensor = factor(
+      sensor,
+      levels = sort(unique(sensor)),
+      labels = c("Thumb\nOpp.", "Thumb\n", "Index\nFinger") 
+    ),
+    `Weight (g)` = factor(
+      `Weight (g)`,
+      levels = sort(unique(`Weight (g)`)),
+      labels = paste0(sort(unique(`Weight (g)`)), " g") 
+    ),
+    duration_combo = case_when(
+      `Update thumb opposition duration` == "yes" & `Update thumb flexion duration` == "yes" ~ "111",
+      `Update thumb opposition duration` == "yes" & `Update thumb flexion duration` == "no"  ~ "101",
+      `Update thumb opposition duration` == "no"  & `Update thumb flexion duration` == "yes" ~ "011",
+      `Update thumb opposition duration` == "no"  & `Update thumb flexion duration` == "no"  ~ "001"
+    ),
+    duration_combo = factor(
+      duration_combo, levels = c("111", "101", "011", "001")
+      )
+  ) %>% 
+  filter(
+    case_when(
+      duration_combo == "111" ~ sensor %in% c("Thumb\nOpp.", "Thumb\n", "Index\nFinger"),
+      duration_combo == "101" ~ sensor %in% c("Thumb\nOpp.", "Index\nFinger"),
+      duration_combo == "011" ~ sensor %in% c("Thumb\n", "Index\nFinger"),
+      duration_combo == "001" ~ sensor %in% c("Index\nFinger"),
+      TRUE ~ FALSE
+    )
+  ) 
+
+error_data <- cerebellum_data %>% filter(sheet_clean == "Error")
+correction_data <- cerebellum_data %>% filter(sheet_clean == "Correction") %>%
+  mutate(value = value * 10)
+
+
+error_regions <- error_data %>%
+  mutate(
+    fill = case_when(
+      value == 1  ~ "Grip Defizit",
+      value == -1 ~ "Grip Overforce",
+      TRUE        ~ NA_character_
+    ),
+    ymin = case_when(
+      value == 1  ~ 0,  
+      value == -1 ~ -Inf, 
+      TRUE        ~ NA_real_
+    ),
+    ymax = case_when(
+      value == 1  ~ Inf,
+      value == -1 ~ 0,
+      TRUE        ~ NA_real_
+    )
+  )
+
+hline_df <- tibble(
+  sheet_clean = "Correction",
+  yintercept = c(-10, 10) * 10
+)
+
+n_sensors <- length(unique(cerebellum_data$sensor))
+default_colors <- hue_pal()(4)  
+sensor_colors <- default_colors[-1]         # drop first color
+
+ggplot(correction_data, aes(x = iteration, y = value, color = sheet_clean, group = interaction(experiment, label, sheet_clean, sensor))) +
+  geom_rect( # Shaded Error background
+    data = error_regions,
+    aes(xmin = iteration - 0.5, xmax = iteration + 0.5, ymin = ymin, ymax = ymax, fill = fill),
+    inherit.aes = FALSE,
+    alpha = 0.2
+  ) +
+  geom_line(alpha = 0.6, size = 1) +   # line per experiment
+  geom_hline(data = hline_df, aes(yintercept = yintercept), linetype = "dashed", color = "black", size = 0.8) +
+  facet_grid(sensor ~ factor(`Weight (g)`) ~ duration_combo, scales = "fixed") +
+  labs(
+    x = "Iteration",
+    y = "Change in Actuator Duration (ms)",
+    color = NULL
+  ) +
+  scale_color_manual(values = sensor_colors) +
+  scale_fill_manual(
+    name = "Error",
+    values = c("Grip Defizit" = "red", "Grip Overforce" = "blue"),
+    na.translate = FALSE
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(correction_data$iteration), by = 20)  # show every 20 iterations
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(hjust = 1)
+  )
+```
+
 

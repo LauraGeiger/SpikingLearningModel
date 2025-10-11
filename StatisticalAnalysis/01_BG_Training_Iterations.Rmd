@@ -4,12 +4,12 @@ output: html_notebook
 ---
 
 ```{r}
-install.packages("tidyverse")
-install.packages("readxl")
-install.packages("ggplot2")
-remove.packages("rlang")
-install.packages("rlang")
-install.packages("ggstatsplot")
+#install.packages("tidyverse")
+#install.packages("readxl")
+#install.packages("ggplot2")
+#remove.packages("rlang")
+#install.packages("rlang")
+#install.packages("ggstatsplot")
 ```
 
 
