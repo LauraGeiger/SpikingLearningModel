@@ -1129,7 +1129,7 @@ class MotorLearning:
                 start_time = time.time()
 
                 training_mode = any(loop.training for loop in self.loops)
-                action_selection_completed = all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops)
+                action_selection_completed = True #all(loop.reward_over_time[loop.selected_goal][-1] for loop in self.loops)
                 
                 for idx, loop in enumerate(self.loops):
                     
@@ -1167,9 +1167,12 @@ class MotorLearning:
 
                 # Cerebellum update input
                 if self.cerebellum_required and not training_mode:
-                    desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
-                    desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
-                    desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
+                    #desired_grasp_type = self.loops[1].selected_goal if self.loops[1].selected_goal else '0' * len(self.cerebellum.grasp_types)
+                    #desired_joints = self.loops[1].selected_action[0] if self.loops[1].selected_action else '0' * len(self.cerebellum.joints) 
+                    #desired_actuators = self.loops[0].selected_action[0] if self.loops[0].selected_action else '0' * len(self.cerebellum.actuators)
+                    desired_grasp_type = "100"
+                    desired_joints = "1110"
+                    desired_actuators = "1110"
                     norm_touch_delta_grasp = [min(1.0, delta_grasp / max_delta_grasp) for delta_grasp, max_delta_grasp in zip(self.touch_sensor_delta_grasp, self.touch_sensor_expected_max_delta_grasp)]
                     norm_touch_delta_hold = [min(1.0, delta_hold / max_delta_hold) for delta_hold, max_delta_hold in zip(self.touch_sensor_delta_hold, self.touch_sensor_expected_max_delta_hold)]
                     self.cerebellum.update_input_stimuli(desired_grasp_type, desired_joints, desired_actuators, norm_touch_delta_grasp, norm_touch_delta_hold)
@@ -1218,6 +1221,9 @@ class MotorLearning:
                     self.cerebellum.fig.canvas.draw_idle()
                     self.cerebellum.fig.canvas.flush_events()
             
+                if self.iteration % 10 == 0:
+                    self.toggle_pause()
+                    
         except KeyboardInterrupt:
             self.interrupt = True
             print("\nCtrl-C pressed.")
@@ -1587,13 +1593,17 @@ class BasalGangliaLoop:
             self.total_cells = sum(self.cell_types_numbers[ct][1] for ct in self.cell_types)
             
             y_max = self.total_cells + 1.5
+            y_max += 8
+
             self.axs_plot[self.row_spike][i].set_ylim(0.5, y_max)
             yticks = []
             cumulative = 0
+            min_block_height = 5
             for ct in self.cell_types:
-                mid = y_max - (cumulative + (self.cell_types_numbers[ct][1]+1) / 2)
+                n_cells = max(self.cell_types_numbers[ct][1], min_block_height)
+                mid = y_max - (cumulative + (n_cells+1) / 2)
                 yticks.append(mid)
-                cumulative += self.cell_types_numbers[ct][1] 
+                cumulative += n_cells #self.cell_types_numbers[ct][1] 
             self.axs_plot[self.row_spike][i].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_spike][i].set_yticks(yticks)
             self.axs_plot[self.row_spike][i].set_yticklabels(self.cell_types)
@@ -1939,7 +1949,7 @@ class BasalGangliaLoop:
             self.axs_plot[self.row_potential][plot_id].set_title(action)
 
             # Spike raster plot
-            y_base = self.total_cells
+            y_base = self.total_cells + 8
             for ct in self.cell_types:
                 all_spikes = []
                 if ct == 'Cor':
@@ -1948,7 +1958,10 @@ class BasalGangliaLoop:
                     spike_block = self.spike_times[ct][action_id]
                     
                 for k in range(self.cell_types_numbers[ct][1]):
-                    y_val = y_base - k
+                    if self.cell_types_numbers[ct][1] == 1:
+                        y_val = y_base - 3
+                    else:
+                        y_val = y_base - k
                     spikes = np.array(spike_block[k].to_python())
                     y_vals = np.ones_like(spikes) * y_val
                     self.raster_lines[ct][plot_id][k].set_data(spikes, y_vals)
@@ -1970,8 +1983,9 @@ class BasalGangliaLoop:
                         rate_scaled = rate_scaled * (self.cell_types_numbers[ct][1] - 1) + y_base - self.cell_types_numbers[ct][1] + 1
                         self.rate_lines[ct][plot_id].set_data(bin_ends, rate_scaled)
                     else:
-                        self.rate_lines[ct][plot_id].set_data([], [])          
-                y_base -= self.cell_types_numbers[ct][1]
+                        self.rate_lines[ct][plot_id].set_data([], [])   
+                #y_base -= self.cell_types_numbers[ct][1]
+                y_base -= max(self.cell_types_numbers[ct][1], 5)
             new_xlim = max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time))
             if self.axs_plot[self.row_spike][plot_id].get_xlim() != new_xlim:
                 self.axs_plot[self.row_spike][plot_id].set_xlim(*new_xlim)
@@ -2391,7 +2405,7 @@ class Cerebellum:
     def _init_membrane_potential_plot(self):
         # Membrane potential plot
         self.axs_plot[self.row_potential][0].set_ylabel('Membrane\npotential (mV)')
-        self.axs_input[0].set_ylabel('Membrane\npotential (mV)')
+        self.axs_input[0].set_ylabel('Membrane\npotential\n(mV)')
         self.mem_lines = {ct: [] for ct in self.cell_types}
         self.mem_lines_pos = {ct: [[] for _ in range(self.num_of_plots)] for ct in self.cell_types}
         self.mem_lines_neg = {ct: [[] for _ in range(self.num_of_plots)] for ct in self.cell_types}
@@ -2429,7 +2443,7 @@ class Cerebellum:
         self.axs_plot[self.row_spike][0].set_ylabel('Spike raster')
         self.raster_lines = {ct: [[] for _ in range(self.num_of_plots)] for ct in self.cell_types}
         
-        self.axs_input[1].set_ylabel('Spike raster')
+        self.axs_input[1].set_ylabel('Spike\nraster')
         self.raster_lines_input = {ct: [] for ct in self.cell_types if ct == 'PN' or ct == 'GC'}
 
         # Spikes of PN and GC
@@ -2469,7 +2483,11 @@ class Cerebellum:
                         self.raster_lines[ct][i].append(line)
                         self.total_cells += 1
 
-            y_max = self.total_cells + 1
+            # Add vertical padding
+            padding = 2  # increase if you need more space between pos/neg halves
+            y_max = self.total_cells + 1 + padding
+
+            #y_max = self.total_cells + 1
             self.axs_plot[self.row_spike][i].set_ylim(0.5, y_max)
             yticks = []
             yticklabels = []
@@ -2482,6 +2500,8 @@ class Cerebellum:
                         yticks.append(mid)
                         yticklabels.append(f"{ct}_{half_label}")
                         cumulative += n_cells
+                if half_label == "pos":
+                    cumulative += padding  # add space before the next half (neg group)
             
             # Horizontal line to split positive and negative parts
             self.axs_plot[self.row_spike][i].axhline(y=y_max/2, color="black", linestyle='solid', linewidth=1)
@@ -2536,7 +2556,7 @@ class Cerebellum:
 
     def _init_correction_plot(self):
         # Correction plot
-        self.axs_plot[self.row_corrections][0].set_ylabel('Correction\n(ms)')
+        self.axs_plot[self.row_corrections][0].set_ylabel('Correction')
         self.correction_lines = [[] for _ in range(self.num_of_plots)]
 
         for plot_idx in range(self.num_of_plots):
@@ -2546,9 +2566,9 @@ class Cerebellum:
             self.axs_plot[self.row_corrections][plot_idx].set_xlim(0, self.plot_interval)
             self.axs_plot[self.row_corrections][plot_idx].set_ylim(-1.1, 1.1)
             self.axs_plot[self.row_corrections][plot_idx].xaxis.set_major_formatter(ms_to_s)
-            self.axs_plot[self.row_corrections][plot_idx].set_xlabel('Simulation\ntime (s)')
-            self.axs_plot[self.row_corrections][plot_idx].axhline(y=-5, color="black", linestyle='solid', linewidth=1, alpha=0.5)
-            self.axs_plot[self.row_corrections][plot_idx].axhline(y=5, color="black", linestyle='solid', linewidth=1, alpha=0.5)
+            self.axs_plot[self.row_corrections][plot_idx].set_xlabel('Simulation time (s)')
+            self.axs_plot[self.row_corrections][plot_idx].axhline(y=-10, color="black", linestyle='solid', linewidth=1, alpha=0.5)
+            self.axs_plot[self.row_corrections][plot_idx].axhline(y=10, color="black", linestyle='solid', linewidth=1, alpha=0.5)
             self.axs_plot[self.row_corrections][plot_idx].set_ylim(-11, 11)
 
     def update_touch_sensor_values(self, finger_idx, val, dir='pos'):
@@ -2596,7 +2616,6 @@ class Cerebellum:
 
         joint_to_finger_mapping = [0] + [i for i in range(len(self.joints) - 1)] # 2 joints for thumb
         teaching_input = [0] * self.total_cell_numbers['IO']
-        
         for j_idx, desired_joint in enumerate(desired_joints):
             error_dir = 0
             if action_selection_completed:
@@ -2768,8 +2787,9 @@ class Cerebellum:
                         self.axs_plot[self.row_potential][plot_id].set_xlim(*new_xlim)
             
             # Spike raster plot
-            y_base = self.total_cells
-            grouped_order = []
+            padding = 2
+            y_base = self.total_cells + padding
+            y_current = y_base
 
             # Determine halves for positive and negative correction
             for half in ['pos', 'neg']:
@@ -2780,20 +2800,17 @@ class Cerebellum:
                             indices = range(num_cells // 2)
                         else:
                             indices = range(num_cells // 2, num_cells)
-                        grouped_order.append((ct, indices))
-            
-            # Plot spikes according to the grouped_order
-            y_current = y_base
-            for ct, indices in grouped_order:
-                spike_block = self.spike_times[ct][plot_id]
-                all_spikes = []
 
-                for k in indices:
-                    spikes = np.array(spike_block[k].to_python())
-                    y_vals = np.ones_like(spikes) * y_current
-                    self.raster_lines[ct][plot_id][k].set_data(spikes, y_vals)
-                    all_spikes.extend(spikes)
-                    y_current -= 1  # decrement y for next neuron
+                        spike_block = self.spike_times[ct][plot_id]
+                        all_spikes = []
+                        for k in indices:
+                            spikes = np.array(spike_block[k].to_python())
+                            y_vals = np.ones_like(spikes) * y_current
+                            self.raster_lines[ct][plot_id][k].set_data(spikes, y_vals)
+                            all_spikes.extend(spikes)
+                            y_current -= 1  # decrement y for next neuron
+                if half == 'pos':
+                    y_current -= padding  # leave space before starting negative half
 
             # Set xlim
             new_xlim = max(0, int(current_time) - self.plot_interval), max(self.plot_interval, int(current_time))

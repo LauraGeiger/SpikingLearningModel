@@ -4,12 +4,12 @@ output: html_notebook
 ---
 
 ```{r}
-install.packages("tidyverse")
-install.packages("readxl")
-install.packages("ggplot2")
-remove.packages("rlang")
-install.packages("rlang")
-install.packages("ggstatsplot")
+#install.packages("tidyverse")
+#install.packages("readxl")
+#install.packages("ggplot2")
+#remove.packages("rlang")
+#install.packages("rlang")
+#install.packages("ggstatsplot")
 ```
 
 ```{r}
@@ -22,6 +22,7 @@ library(readxl)
 library(dplyr)
 library(purrr)
 library(stringr)
+library(ggnewscale)
 
 # Experiment numbers
 exp_numbers <- sprintf("%03d", 28:30)
@@ -100,16 +101,35 @@ all_data <- all_data %>%
 ```{r}
 transitions <- c(10, 20)
 
+sheet_clean_labels <- c(
+  "Activation" = "Motor Loop Activation",
+  "Reward" = "Motor Loop Reward"
+)
+
+goal_labels <- c(
+  "0110" = "A | 0110",
+  "1110" = "B | 1110",
+  "1111" = "C | 1110"
+)
+
 ggplot(all_data, aes(x = iteration, y = value, group = interaction(experiment, goal), color = goal)) +
   geom_line(alpha = 0.6, size = 1) +
   geom_vline(xintercept = transitions, color = "black", linetype = "dashed", size = 0.5) +
-  facet_grid(experiment ~ sheet_clean, # rows = experiments, columns = sheets
+  facet_grid(experiment ~ sheet_clean,
              scales = "fixed",
-             labeller = labeller(experiment = exp_labels)) +  
+             labeller = labeller(
+               experiment = exp_labels,
+               sheet_clean = sheet_clean_labels
+               )
+             ) +  
   labs(
     x = "Iteration",
     y = "Value",
-    color = "Goal"
+    color = "Grasp Goal | Joint Goal"
+  ) +
+  scale_color_discrete(
+    name = "Grasp Goal | Joint Goal",
+    labels = goal_labels
   ) +
   scale_x_continuous(
     breaks = seq(0, max(all_data$iteration), by = 10)  # show every 10 iterations
@@ -205,11 +225,465 @@ ggplot(activation_delays, aes(y = label, x = delay)) +
   theme_minimal(base_size = 14) +
   theme(legend.position = "non")
 ```
-
-
-
-
-
-
  
+```{r}
+# Function to compute activation delays until activation AND reward == 1
+compute_activation_reward_delays <- function(exp, transitions) {
+  df_act <- exp$activation_over_time
+  df_rew <- exp$reward_over_time
+  goals <- exp$goals
+  
+  map_dfr(transitions, function(t) {
+    after_t_act <- df_act %>% filter(iteration > t)
+    after_t_rew <- df_rew %>% filter(iteration > t)
+    
+    # Only consider goals inactive at transition
+    inactive_at_transition <- goals[sapply(goals, function(g) df_act[[g]][df_act$iteration == t] == 0)]
+    if (length(inactive_at_transition) == 0) return(NULL)
+    
+    # For each goal, find first iteration where activation == 1 and reward == 1
+    first_joint <- map_dfr(inactive_at_transition, function(goal) {
+      joint <- after_t_act %>%
+        select(iteration, act = !!sym(goal)) %>%
+        left_join(after_t_rew %>% select(iteration, rew = !!sym(goal)), by = "iteration") %>%
+        filter(act == 1 & rew == 1)
+      
+      first_iter <- if (nrow(joint) > 0) min(joint$iteration) else NA_real_
+      
+      tibble(goal = goal, first_iter = first_iter)
+    })
+    
+    # Pick first goal that reached joint condition
+    first_joint <- first_joint %>%
+      filter(!is.na(first_iter)) %>%
+      arrange(first_iter)
+    
+    if (nrow(first_joint) == 0) return(NULL)
+    
+    next_goal <- first_joint$goal[1]
+    next_iter <- first_joint$first_iter[1]
+    
+    tibble(
+      transition_iter = t,
+      next_goal = next_goal,
+      first_joint_iter = next_iter,
+      delay = next_iter - t
+    )
+  })
+}
+
+# Apply across all experiments
+activation_reward_delays <- map_dfr(names(experiments), function(exp_num) {
+  exp <- experiments[[exp_num]]
+  compute_activation_reward_delays(exp, transitions) %>%
+    mutate(experiment = exp_num)
+})
+
+# Plot
+label <- ""
+mean_delay_value <- mean(activation_reward_delays$delay, na.rm = TRUE)
+mean_delay_df <- tibble(x = label, y = mean_delay_value)
+
+ggplot(activation_reward_delays, aes(y = label, x = delay)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black", size = 0.8) +
+  geom_boxplot(width = 0.4, alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(aes(color = as.factor(next_goal)), height = 0.1, width = 0, size = 2, alpha = 0.8) +
+  geom_point(data = mean_delay_df, aes(y = label, x = mean_delay_value),
+             color = "darkred", size = 3, shape = 16) +
+  geom_label(data = mean_delay_df,
+             aes(y = label, x = mean_delay_value, label = paste0("mean = ", round(mean_delay_value, 1))),
+             fill = "white", color = "black", label.r = unit(0.15, "lines"),
+             size = 3, label.padding = unit(0.05, "lines"), hjust = 0.5, nudge_y = 0.1) +
+  labs(
+    y = "Correct Activation\n(Reward == 1 and Activation == 1)",
+    x = "Delay after Grasp Type Change in Iterations",
+    color = "New Goal"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "non")
+
+```
+ 
+```{r}
+transitions <- c(10, 20)
+
+sheet_clean_labels <- c(
+  "Activation" = "Motor Loop Activation",
+  "Reward" = "Motor Loop Reward"
+)
+
+goal_labels <- c(
+  "0110" = "A | 0110",
+  "1110" = "B | 1110",
+  "1111" = "C | 1110"
+)
+
+delay_regions <- activation_reward_delays %>%
+  mutate(
+    xstart = transition_iter,
+    xend   = first_joint_iter,
+    ystart = -Inf,
+    yend   = Inf
+  )
+
+ggplot(all_data, aes(x = iteration, y = value, group = interaction(experiment, goal), color = goal)) +
+  geom_rect(
+    data = delay_regions,
+    aes(xmin = xstart, xmax = xend, ymin = ystart, ymax = yend, fill = "Delay Period"),
+    inherit.aes = FALSE,
+    alpha = 0.3
+  ) +
+  scale_fill_manual(
+    name = "",
+    values = c("Delay Period" = "grey70")
+  ) +
+  geom_line(alpha = 0.6, size = 1) +
+  geom_vline(xintercept = transitions, color = "black", linetype = "dashed", size = 0.5) +
+  facet_grid(
+    experiment ~ sheet_clean,
+    scales = "fixed",
+    labeller = labeller(
+      experiment = exp_labels,
+      sheet_clean = sheet_clean_labels
+    )
+  ) +  
+  labs(
+    x = "Iteration",
+    y = "Value",
+    color = "Grasp Goal | Joint Goal",
+    fill = "Delay"
+  ) +
+  scale_color_discrete(
+    name = "Grasp Goal | Joint Goal",
+    labels = goal_labels
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, max(all_data$iteration), by = 10)  # show every 10 iterations
+  ) +
+  scale_y_continuous(
+    breaks = scales::pretty_breaks(n = 3)   # 3 ticks on y-axis
+  )+
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text.y.right = element_text(angle = 0),
+    axis.text.x = element_text( hjust = 1),
+    legend.position = "right"
+  )
+
+```
+```{r}
+
+# Function to compute first iteration after transition where both Activation AND Reward are 1 for a loop
+compute_loop_activation_reward_delay <- function(all_data_loop, transitions, loop_name) {
+  map_dfr(transitions, function(t) {
+    next_t <- transitions[which(transitions > t)][1]
+    if(is.na(next_t)) next_t <- Inf
+    
+    # Filter data for this loop after transition
+    df_act <- all_data_loop %>%
+      filter(sheet_clean == "Activation", iteration > t, iteration < next_t)
+    df_rew <- all_data_loop %>%
+      filter(sheet_clean == "Reward", iteration > t, iteration < next_t)
+    
+    # Only for Motor Loop: consider variables inactive at transition
+    if (loop_name == "Motor Loop") {
+      inactive_vars <- all_data_loop %>%
+        filter(sheet_clean == "Activation", iteration == t, value == 0) %>%
+        group_by(experiment, variable) %>%
+        summarise(is_inactive = all(value == 0), .groups = "drop") %>%
+        filter(is_inactive) %>%
+        pull(variable)
+      
+      df_act <- df_act %>% filter(variable %in% inactive_vars)
+      df_rew <- df_rew %>% filter(variable %in% inactive_vars)
+    }
+    
+    if(nrow(df_act) == 0 | nrow(df_rew) == 0) return(NULL)
+    
+    # Compute first iteration where any variable goes 1
+    first_act_iter <- df_act %>%
+      group_by(variable) %>%
+      filter(any(value == 1)) %>%
+      summarise(first_iter = min(iteration[value == 1]), .groups = "drop") %>%
+      pull(first_iter)
+    
+    first_rew_iter <- df_rew %>%
+      group_by(variable) %>%
+      filter(any(value == 1)) %>%
+      summarise(first_iter = min(iteration[value == 1]), .groups = "drop") %>%
+      pull(first_iter)
+    
+    if(length(first_act_iter) == 0 | length(first_rew_iter) == 0) return(NULL)
+    
+    # First iteration where both Activation AND Reward are 1
+    first_joint_iter <- max(first_act_iter[1], first_rew_iter[1])
+  
+    
+    tibble(
+      loop = loop_name,
+      transition_iter = t,
+      first_joint_iter = first_joint_iter,
+      delay = first_joint_iter - t
+    )
+  })
+}
+
+activation_reward_delays <- map_dfr(names(experiments), function(exp_num) {
+  exp_data <- all_data %>% filter(experiment == exp_num)
+  
+  bind_rows(
+    compute_loop_activation_reward_delay(exp_data %>% filter(loop_clean == "Premotor\nLoop"), transitions, "Premotor Loop"),
+    compute_loop_activation_reward_delay(exp_data %>% filter(loop_clean == "Motor\nLoop"), transitions, "Motor Loop")
+  ) %>% mutate(experiment = exp_num)
+})
+
+
+# Plot
+mean_delay_df <- activation_reward_delays %>%
+  group_by(loop) %>%
+  summarise(mean_delay = mean(delay, na.rm = TRUE), .groups = "drop") %>%
+  mutate(y = loop)  # same y-value as in your plot
+
+
+
+ggplot(activation_reward_delays, aes(y = loop, x = delay)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black", size = 0.8) +
+  geom_boxplot(width = 0.4, alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(aes(color = as.factor(loop)), height = 0.1, width = 0, size = 2, alpha = 0.8) +
+  geom_point(data = mean_delay_df, aes(x = mean_delay),
+             color = "darkred", size = 3, shape = 16) +
+  geom_label(data = mean_delay_df,
+             aes(x = mean_delay, label = paste0("mean = ", round(mean_delay, 1))),
+             fill = "white", color = "black", label.r = unit(0.15, "lines"),
+             size = 3, label.padding = unit(0.05, "lines"), hjust = 0.5, nudge_y = 0.3) +
+  scale_y_discrete(labels = c("Premotor Loop" = "Premotor Loop", 
+                              "Motor Loop" = "Premotor Loop\n+ Motor Loop")) +
+  labs(
+    y = NULL,
+    x = "Learning Period after Grasp Type Change (Iterations)",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+
+
+
+```
+
+
+
+```{r}
+# Experiment numbers
+exp_numbers <- sprintf("%03d", 28:30)
+exp_labels <- c("028" = "#1", "029" = "#2", "030" = "#3")
+sheet_names <- c("reward_over_time", "activation_over_time")
+
+# Base folder path
+base_path <- "../Data/Experiments/02_Grasping"
+loop_types <- c("PremotorLoop", "MotorLoop")
+
+
+load_experiment_data <- function(exp_num, sheets, loop_types) {
+  exp_path <- file.path(base_path, exp_num)
+  
+  # Search for both loop files
+  files <- map(loop_types, function(loop) {
+    file_path <- list.files(exp_path, pattern = paste0(loop, "\\.xlsx$"), full.names = TRUE)
+    file_path <- file_path[!grepl("~\\$", file_path)]  # skip temp Excel lock files
+    if (length(file_path) == 0) return(NULL)
+    file_path[1]
+  }) %>% set_names(loop_types)
+  
+  # Read each file and sheet
+  exp_data <- map(files, function(file) {
+    if (is.null(file)) return(NULL)
+    tryCatch({
+      data <- map(sheets, function(sheet) {
+        df <- read_excel(file, sheet = sheet)
+        if (!"time" %in% names(df)) return(NULL)
+        df <- df %>% mutate(iteration = time / 100)
+        df
+      })
+      names(data) <- sheets
+      data
+    }, error = function(e) {
+      warning(paste("Skipping unreadable file:", file))
+      NULL
+    })
+  })
+  
+  exp_data
+}
+
+
+experiments <- set_names(
+  map(exp_numbers, ~ load_experiment_data(.x, sheet_names, loop_types)),
+  exp_numbers
+)
+
+
+extract_sheet_data <- function(experiments, sheet_name) {
+  map_dfr(names(experiments), function(exp_num) {
+    exp <- experiments[[exp_num]]
+    if (is.null(exp)) return(NULL)
+    
+    map_dfr(names(exp), function(loop_name) {
+      loop_data <- exp[[loop_name]]
+      if (is.null(loop_data)) return(NULL)
+      
+      df <- loop_data[[sheet_name]]
+      if (is.null(df)) return(NULL)
+      
+      df %>%
+        pivot_longer(
+          cols = -c(time, iteration),
+          names_to = "variable",
+          values_to = "value"
+        ) %>%
+        mutate(
+          experiment = exp_num,
+          loop = loop_name,
+          sheet = sheet_name
+        )
+    })
+  })
+}
+
+
+all_data <- map_dfr(sheet_names, extract_sheet_data, experiments = experiments)
+
+all_data <- all_data %>%
+  mutate(
+    sheet_clean = sheet %>%
+      str_remove("_over_time$") %>%
+      str_replace_all("_", " ") %>%
+      str_to_title(),
+    loop_clean = factor(loop,
+                        levels = c("PremotorLoop", "MotorLoop"),
+                        labels = c("Premotor\nLoop", "Motor\nLoop")),
+    loop_sheet = paste(loop_clean, sheet_clean, sep = " | ")
+  )
+
+loop_sheet_labels <- c(
+  "Premotor Loop | Reward" = "Premotor\nLoop\nReward",
+  "Premotor Loop | Activation" = "Premotor\nLoop\nActivation",
+  "Motor Loop | Reward" = "Motor\nLoop\nReward",
+  "Motor Loop | Activation" = "Motor\nLoop\nActivation"
+)
+
+transitions <- c(10, 20)
+#vline_data <- tibble(xintercept = transitions, linetype = "Grasp Type Change")
+
+all_data <- all_data %>%
+  mutate(
+    sheet_clean = factor(sheet_clean, levels = c("Reward", "Activation"))
+  )
+
+all_data <- all_data %>%
+  group_by(variable) %>%                 # group by each variable
+  filter(any(value != 0, na.rm = TRUE)) %>%  # keep only variables with at least one non-zero value
+  ungroup()
+
+premotor_reward <- all_data %>%
+  filter(loop_clean == "Premotor\nLoop", sheet_clean == "Reward") %>% 
+  mutate(variable = droplevels(factor(variable, levels = c("100", "010", "001"))))
+premotor_activation <- all_data %>%
+  filter(loop_clean == "Premotor\nLoop", sheet_clean == "Activation") %>% 
+  mutate(variable = droplevels(factor(variable, levels = c("1110", "1111", "0110"))))
+motor_reward <- all_data %>%
+  filter(loop_clean == "Motor\nLoop", sheet_clean == "Reward") %>% 
+  mutate(variable = droplevels(factor(variable, levels = c("1110", "1111", "0110")))) 
+motor_activation <- all_data %>%
+  filter(loop_clean == "Motor\nLoop", sheet_clean == "Activation") %>% 
+  mutate(variable = droplevels(factor(variable, levels = c("1110", "1111", "0110"))))
+
+delay_regions <- activation_reward_delays %>%
+  mutate(
+    xstart = transition_iter,
+    xend   = first_joint_iter,
+    ystart = -Inf,
+    yend   = Inf
+  )%>%
+  mutate(
+    loop_clean = factor(loop, levels = c("Premotor Loop", "Motor Loop"),
+                        labels = c("Premotor\nLoop", "Motor\nLoop"))
+  )
+
+ggplot(all_data, aes(x = iteration, y = value, group = variable)) +
+  geom_rect(
+    data = delay_regions,
+    aes(xmin = xstart, xmax = xend, ymin = ystart, ymax = yend, fill = "Learning Period"),
+    inherit.aes = FALSE,
+    alpha = 0.3
+  ) +
+  scale_fill_manual(
+    name = "",
+    values = c("Learning Period" = "grey70")
+  ) +
+  geom_line(
+    data = premotor_reward,
+    aes(color = variable),
+    size = 1,
+    alpha = 0.8
+  ) +
+  scale_color_viridis_d(
+    name = "Premotor Loop\nGoals",
+    option = "D",
+  ) +
+  guides(
+    color = guide_legend(order = 1)
+  ) +
+  
+  ggnewscale::new_scale_color() +
+  
+  geom_line(
+    data = motor_reward,
+    aes(color = variable),
+    size = 1,
+    alpha = 0.8
+  ) +
+  scale_color_viridis_d(
+    name = "Motor Loop\nGoals",
+    option = "D",
+  ) +
+  guides(
+    color = guide_legend(order = 2)
+  ) +
+  
+  geom_line(
+    data = premotor_activation,
+    aes(color = variable),
+    size = 1,
+    alpha = 0.8,
+    show.legend = FALSE
+  ) +
+  
+  geom_line(
+    data = motor_activation,
+    aes(color = variable),
+    size = 1,
+    alpha = 0.8,
+    show.legend = FALSE
+  ) +
+  
+  geom_vline(xintercept = transitions, linetype="dashed", color = "black", size = 0.5) +
+  scale_linetype_manual(name = "", values = c("Grasp Type Change" = "dashed")) +
+  scale_y_continuous(
+    breaks = c(0, 1)
+  ) +
+  facet_grid(loop_clean + sheet_clean ~ experiment,
+             labeller = labeller(experiment = exp_labels, loop_sheet = loop_sheet_labels)) +
+  labs(x = "Iteration", y = "Value") +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text.y = element_text(angle = -90, hjust = 0),
+    legend.position = "right",
+  )
+
+
+```
+
+
+
 
